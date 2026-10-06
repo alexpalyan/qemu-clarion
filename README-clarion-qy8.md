@@ -83,6 +83,11 @@ the same command line is merged with the first.
 | `board` | `auto` | board peripherals by unit model: `auto`, `qy8652nb`, `qy8202na` (see below) |
 | `micom` | `on` | built-in companion MCU on SCIF4; `off` lets you attach your own responder via `-serial` |
 | `dispmicom` | `on` | built-in display panel MCU on SCIF1; `off` works the same way |
+| `gps` | `on` | built-in u-blox GNSS receiver on SCIF2; `off` leaves SCIF2 on `-serial` index 3 |
+| `gps-lat` | `50.4501` | fix latitude in decimal degrees; writable at runtime with `qom-set` |
+| `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
+| `gps-speed` | `0` | speed in knots; a nonzero value advances the position |
+| `gps-course` | `0` | course in degrees |
 | `du-dotclk` | `0` | display dot clock in Hz; `0` means no frame tick. Use `33333333` for the window |
 | `du-spi` | `31` | GIC line of the display frame interrupt |
 | `i2c-empty` | `off` | I2C0..I2C2 as empty buses: an immediate NACK instead of a bus timeout |
@@ -92,6 +97,20 @@ the same command line is merged with the first.
 | `tma460-profile` | `on` | Synthetic TMA460 register profile with pointer-to-touch input |
 
 ### Board selection
+
+### GNSS receiver
+
+The built-in `clarion-ublox` device is connected to SCIF2 and enabled by
+default. It answers UBX configuration requests with ACK-ACK, answers MON-VER,
+and publishes the configured NAV messages and NMEA RMC, VTG, GGA, GSA, GSV,
+and GLL sentences once per guest-clock second. GLL is deliberately last: the
+unit's locator hands a buffered NMEA group to its parser when it receives a
+sentence whose identifier ends in `GLL`.
+
+Use `gps=off` to leave SCIF2 available through `-serial 3`. The position
+properties accept decimal strings; for example, a QMP `qom-set` of `gps-lat`
+or `gps-lon` changes the next receiver update. The clock comes from QEMU's
+guest RTC, so `-rtc base=...` makes runs reproducible.
 
 Boards are named after the unit model, because the car generation does
 not tell the unit apart: the 2014-2017 Leaf (ZE0) was fitted with units
