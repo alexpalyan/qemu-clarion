@@ -80,6 +80,7 @@ the same command line is merged with the first.
 | Property | Default | Purpose |
 |---|---|---|
 | `dipsw` | `5` | value of the board DIP switches, 0..7 |
+| `board` | `auto` | board peripherals by unit model: `auto`, `qy8652nb`, `qy8202na` (see below) |
 | `micom` | `on` | built-in companion MCU on SCIF4; `off` lets you attach your own responder via `-serial` |
 | `dispmicom` | `on` | built-in display panel MCU on SCIF1; `off` works the same way |
 | `du-dotclk` | `0` | display dot clock in Hz; `0` means no frame tick. Use `33333333` for the window |
@@ -87,8 +88,32 @@ the same command line is merged with the first.
 | `i2c-empty` | `off` | I2C0..I2C2 as empty buses: an immediate NACK instead of a bus timeout |
 | `i2c4` | `on` | Bounded I2C4 controller model at `0xffc73000` (the touchscreen bus) |
 | `i2c4-recorder` | `off` | transaction recorder on I2C4, address `0x24` |
-| `tma460` | `on` | TMA460 touchscreen controller model on I2C4 (requires `i2c4=on`); with `board=ze0` a TMA616 at `0x67` instead |
+| `tma460` | `on` | TMA460 touchscreen controller model on I2C4 (requires `i2c4=on`); on the `qy8202na` board a TMA616 at `0x67` instead |
 | `tma460-profile` | `on` | Synthetic TMA460 register profile with pointer-to-touch input |
+
+### Board selection
+
+Boards are named after the unit model, because the car generation does
+not tell the unit apart: the 2014-2017 Leaf (ZE0) was fitted with units
+of more than one family. With `board=auto` the machine reads the model
+from the flash image, from the block that starts with `PROD` (8 ASCII
+characters at `+0x40` of the block), and prints one line at start-up:
+
+```
+clarion-qy8: unit model QY8202NA (PROD block at 0x40000), board qy8202na (auto)
+```
+
+| Unit model | `board` | Touch controller | Notes |
+|---|---|---|---|
+| `QY8652NB` | `qy8652nb` | TMA460 at `0x24` | found in the 2018+ Leaf (ZE1) |
+| `QY8202NA` | `qy8202na` | TMA616 at `0x67` | found in the 2014-2017 Leaf (ZE0) |
+
+`ze1` and `ze0` are deprecated aliases of `qy8652nb` and `qy8202na`.
+
+With `auto`, an image without a `PROD` block or with an unknown model is
+an error; name the board explicitly to run it anyway. An explicit board
+that does not match the model in the image only gives a warning. A
+QY7-series unit (SH-4) is rejected: this machine does not model it.
 
 A typical configuration with touch:
 
