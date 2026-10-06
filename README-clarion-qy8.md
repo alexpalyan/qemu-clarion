@@ -87,7 +87,7 @@ the same command line is merged with the first.
 | `i2c-empty` | `off` | I2C0..I2C2 as empty buses: an immediate NACK instead of a bus timeout |
 | `i2c4` | `on` | Bounded I2C4 controller model at `0xffc73000` (the touchscreen bus) |
 | `i2c4-recorder` | `off` | transaction recorder on I2C4, address `0x24` |
-| `tma460` | `on` | TMA460 touchscreen controller model on I2C4 (requires `i2c4=on`) |
+| `tma460` | `on` | TMA460 touchscreen controller model on I2C4 (requires `i2c4=on`); with `board=ze0` a TMA616 at `0x67` instead |
 | `tma460-profile` | `on` | Synthetic TMA460 register profile with pointer-to-touch input |
 
 A typical configuration with touch:

@@ -61,3 +61,11 @@ pca954x_read_data(uint8_t value) "PCA954X read data: 0x%02x"
 
 imx_i2c_read(const char *id, const char *reg, uint64_t ofs, uint64_t value) "%s:[%s (0x%" PRIx64 ")] -> 0x%02" PRIx64
 imx_i2c_write(const char *id, const char *reg, uint64_t ofs, uint64_t value) "%s:[%s (0x%" PRIx64 ")] <- 0x%02" PRIx64
+
+# clarion_tma616.c
+clarion_tma616_reset(int level) "reset line %d"
+clarion_tma616_pulse(int mode) "interrupt pulse, mode %d"
+clarion_tma616_write(int bl, int mode, uint8_t off, uint8_t len) "write bl=%d mode %d reg 0x%02x len %u"
+clarion_tma616_bl_cmd(uint8_t cmd) "bootloader command 0x%02x"
+clarion_tma616_command(uint8_t cmd, int mode) "command 0x%02x in mode %d"
+clarion_tma616_report(int event, uint16_t x, uint16_t y) "touch event %d at %u,%u"
