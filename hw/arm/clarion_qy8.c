@@ -23,6 +23,7 @@
  */
 
 #include "qemu/osdep.h"
+#include <math.h>
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/units.h"
@@ -43,6 +44,7 @@
 #include "hw/display/clarion_sgx.h"
 #include "hw/misc/clarion_micom.h"
 #include "hw/misc/clarion_dispmicom.h"
+#include "hw/misc/clarion_ublox.h"
 #include "hw/dma/clarion_hpbdma.h"
 #include "hw/dma/clarion_lbdma.h"
 #include "hw/sd/sd.h"
@@ -312,6 +314,7 @@ typedef struct Qy8Scif {
     DeviceState *dmac;          /* кому віддавати прийняті байти */
     DeviceState *micom;         /* супутній МК на тому ж дроті, якщо є */
     DeviceState *dispmicom;     /* МК панелі на тому ж дроті, якщо є */
+    DeviceState *ublox;         /* приймач GNSS на тому ж дроті, якщо є */
     hwaddr base;                /* фізична база — щоб назвати SCFRDR для DMA */
     uint16_t scsmr, scscr, scfcr;
     uint8_t fifo[QY8_SCIF_FIFO];
@@ -486,6 +489,10 @@ static void qy8_scif_write(void *opaque, hwaddr addr, uint64_t val,
         }
         if (s->dispmicom) {
             clarion_dispmicom_rx_byte(s->dispmicom, ch);
+            break;
+        }
+        if (s->ublox) {
+            clarion_ublox_rx_byte(s->ublox, ch);
             break;
         }
         /* синхронний вивід: без нього ранні рядки буту губляться */
@@ -954,6 +961,11 @@ static int qy8_micom_sink(void *opaque, const uint8_t *buf, int len)
 }
 
 static int qy8_dispmicom_sink(void *opaque, const uint8_t *buf, int len)
+{
+    return qy8_micom_burst(opaque, buf, len);
+}
+
+static int qy8_ublox_sink(void *opaque, const uint8_t *buf, int len)
 {
     return qy8_micom_burst(opaque, buf, len);
 }
@@ -1939,6 +1951,7 @@ struct Qy8MachineState {
     Qy8Hscif hscif0;
     DeviceState *micom;
     DeviceState *dispmicom;
+    DeviceState *ublox;
     DeviceState *sdhi[QY8_NUM_SDHI];
     DeviceState *can;
     DeviceState *i2c4;
@@ -1963,6 +1976,11 @@ struct Qy8MachineState {
     uint32_t du_dotclk;         /* точкова частота DU, Гц; 0 = без такту */
     bool micom_on;              /* вбудований супутній МК на SCIF4 */
     bool dispmicom_on;          /* вбудований МК панелі на SCIF1 */
+    bool gps_on;
+    char *gps_lat;
+    char *gps_lon;
+    char *gps_speed;
+    char *gps_course;
     bool i2c4_on;               /* opt-in bounded R-Car I2C4 model */
     bool i2c4_recorder_on;      /* opt-in I2C4 transaction recorder */
     bool tma460_on;             /* opt-in bounded TMA460 model */
@@ -2557,6 +2575,16 @@ static void qy8_init(MachineState *machine)
         qdev_realize_and_unref(s->dispmicom, NULL, &error_fatal);
     }
 
+    if (s->gps_on) {
+        s->ublox = qdev_new(TYPE_CLARION_UBLOX);
+        qdev_realize_and_unref(s->ublox, NULL, &error_fatal);
+        clarion_ublox_set_position(s->ublox,
+                                   g_ascii_strtod(s->gps_lat, NULL),
+                                   g_ascii_strtod(s->gps_lon, NULL),
+                                   g_ascii_strtod(s->gps_speed, NULL),
+                                   g_ascii_strtod(s->gps_course, NULL));
+    }
+
     /* --- SCIF --- */
     for (i = 0; i < QY8_NUM_SCIF; i++) {
         Qy8Scif *sc = &s->scif[i];
@@ -2577,6 +2605,10 @@ static void qy8_init(MachineState *machine)
         if (i == QY8_SCIF_DISPMICOM && s->dispmicom) {
             sc->dispmicom = s->dispmicom;
             clarion_dispmicom_set_sink(s->dispmicom, qy8_dispmicom_sink, sc);
+        }
+        if (i == 2 && s->ublox) {
+            sc->ublox = s->ublox;
+            clarion_ublox_set_sink(s->ublox, qy8_ublox_sink, sc);
         }
         memory_region_init_io(&sc->mr, NULL, &qy8_scif_ops, sc, name, 0x100);
         memory_region_add_subregion(sysmem,
@@ -2921,6 +2953,114 @@ static void qy8_board_set(Object *obj, const char *value, Error **errp)
     s->board = g_strdup(value);
 }
 
+static bool qy8_gps_get(Object *obj, Error **errp)
+{
+    (void)errp;
+    return QY8_MACHINE(obj)->gps_on;
+}
+
+static void qy8_gps_set(Object *obj, bool value, Error **errp)
+{
+    (void)errp;
+    QY8_MACHINE(obj)->gps_on = value;
+}
+
+static void qy8_gps_position_update(Qy8MachineState *s)
+{
+    if (s->ublox) {
+        clarion_ublox_set_position(s->ublox,
+                                   g_ascii_strtod(s->gps_lat, NULL),
+                                   g_ascii_strtod(s->gps_lon, NULL),
+                                   g_ascii_strtod(s->gps_speed, NULL),
+                                   g_ascii_strtod(s->gps_course, NULL));
+    }
+}
+
+static char *qy8_gps_lat_get(Object *obj, Error **errp)
+{
+    (void)errp;
+    return g_strdup(QY8_MACHINE(obj)->gps_lat);
+}
+
+static void qy8_gps_lat_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+    char *end;
+    double number = g_ascii_strtod(value, &end);
+
+    if (end == value || *end || !isfinite(number) || fabs(number) > 90) {
+        error_setg(errp, "gps-lat must be a decimal latitude in [-90, 90]");
+        return;
+    }
+    g_free(s->gps_lat);
+    s->gps_lat = g_strdup(value);
+    qy8_gps_position_update(s);
+}
+
+static char *qy8_gps_lon_get(Object *obj, Error **errp)
+{
+    (void)errp;
+    return g_strdup(QY8_MACHINE(obj)->gps_lon);
+}
+
+static void qy8_gps_lon_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+    char *end;
+    double number = g_ascii_strtod(value, &end);
+
+    if (end == value || *end || !isfinite(number) || fabs(number) > 180) {
+        error_setg(errp, "gps-lon must be a decimal longitude in [-180, 180]");
+        return;
+    }
+    g_free(s->gps_lon);
+    s->gps_lon = g_strdup(value);
+    qy8_gps_position_update(s);
+}
+
+static char *qy8_gps_speed_get(Object *obj, Error **errp)
+{
+    (void)errp;
+    return g_strdup(QY8_MACHINE(obj)->gps_speed);
+}
+
+static void qy8_gps_speed_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+    char *end;
+    double number = g_ascii_strtod(value, &end);
+
+    if (end == value || *end || !isfinite(number) || number < 0) {
+        error_setg(errp, "gps-speed must be a non-negative speed in knots");
+        return;
+    }
+    g_free(s->gps_speed);
+    s->gps_speed = g_strdup(value);
+    qy8_gps_position_update(s);
+}
+
+static char *qy8_gps_course_get(Object *obj, Error **errp)
+{
+    (void)errp;
+    return g_strdup(QY8_MACHINE(obj)->gps_course);
+}
+
+static void qy8_gps_course_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+    char *end;
+    double number = g_ascii_strtod(value, &end);
+
+    if (end == value || *end || !isfinite(number) || number < 0 ||
+        number >= 360) {
+        error_setg(errp, "gps-course must be in [0, 360) degrees");
+        return;
+    }
+    g_free(s->gps_course);
+    s->gps_course = g_strdup(value);
+    qy8_gps_position_update(s);
+}
+
 static bool qy8_micom_get(Object *obj, Error **errp)
 {
     return QY8_MACHINE(obj)->micom_on;
@@ -3076,6 +3216,21 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_set_description(obj, "dispmicom",
         "вбудований МК панелі дисплея на SCIF1 (off — щоб причепити свій "
         "відповідач через -serial)");
+
+    s->gps_on = true;
+    s->gps_lat = g_strdup("50.4501");
+    s->gps_lon = g_strdup("30.5234");
+    s->gps_speed = g_strdup("0");
+    s->gps_course = g_strdup("0");
+    object_property_add_bool(obj, "gps", qy8_gps_get, qy8_gps_set);
+    object_property_set_description(obj, "gps",
+                                    "built-in u-blox receiver on SCIF2");
+    object_property_add_str(obj, "gps-lat", qy8_gps_lat_get, qy8_gps_lat_set);
+    object_property_add_str(obj, "gps-lon", qy8_gps_lon_get, qy8_gps_lon_set);
+    object_property_add_str(obj, "gps-speed", qy8_gps_speed_get,
+                            qy8_gps_speed_set);
+    object_property_add_str(obj, "gps-course", qy8_gps_course_get,
+                            qy8_gps_course_set);
 
     s->i2c4_on = true;
     object_property_add_bool(obj, "i2c4", qy8_i2c4_get, qy8_i2c4_set);

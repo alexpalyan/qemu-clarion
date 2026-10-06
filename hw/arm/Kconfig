@@ -744,6 +744,7 @@ config CLARION_QY8
     select CLARION_LBDMA
     select CLARION_MICOM
     select CLARION_DISPMICOM
+    select CLARION_UBLOX
     select RENESAS_SDHI
     select RENESAS_CAN
     select USB_EHCI_SYSBUS
