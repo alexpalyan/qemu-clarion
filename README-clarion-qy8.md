@@ -98,20 +98,6 @@ the same command line is merged with the first.
 
 ### Board selection
 
-### GNSS receiver
-
-The built-in `clarion-ublox` device is connected to SCIF2 and enabled by
-default. It answers UBX configuration requests with ACK-ACK, answers MON-VER,
-and publishes the configured NAV messages and NMEA RMC, VTG, GGA, GSA, GSV,
-and GLL sentences once per guest-clock second. GLL is deliberately last: the
-unit's locator hands a buffered NMEA group to its parser when it receives a
-sentence whose identifier ends in `GLL`.
-
-Use `gps=off` to leave SCIF2 available through `-serial 3`. The position
-properties accept decimal strings; for example, a QMP `qom-set` of `gps-lat`
-or `gps-lon` changes the next receiver update. The clock comes from QEMU's
-guest RTC, so `-rtc base=...` makes runs reproducible.
-
 Boards are named after the unit model, because the car generation does
 not tell the unit apart: the 2014-2017 Leaf (ZE0) was fitted with units
 of more than one family. With `board=auto` the machine reads the model
@@ -143,6 +129,20 @@ A typical configuration with touch:
 The touchscreen bus, controller, and synthetic profile are enabled by default.
 Disable them explicitly with `i2c4=off,tma460=off,tma460-profile=off` when a
 test needs the original no-touch behavior. `i2c-empty` remains opt-in.
+
+### GNSS receiver
+
+The built-in `clarion-ublox` device is connected to SCIF2 and enabled by
+default. It answers UBX configuration requests with ACK-ACK, answers MON-VER,
+and publishes the configured NAV messages and NMEA RMC, VTG, GGA, GSA, GSV,
+and GLL sentences once per guest-clock second. GLL is deliberately last: the
+unit's locator hands a buffered NMEA group to its parser when it receives a
+sentence whose identifier ends in `GLL`.
+
+Use `gps=off` to leave SCIF2 available through `-serial 3`. The position
+properties accept decimal strings; for example, a QMP `qom-set` of `gps-lat`
+or `gps-lon` changes the next receiver update. The clock comes from QEMU's
+guest RTC, so `-rtc base=...` makes runs reproducible.
 
 ## 5. Serial ports and SD cards
 
