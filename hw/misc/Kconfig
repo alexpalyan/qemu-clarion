@@ -270,3 +270,6 @@ config CLARION_MICOM
 
 config CLARION_DISPMICOM
     bool
+
+config CLARION_UBLOX
+    bool
