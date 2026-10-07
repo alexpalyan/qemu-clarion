@@ -33,6 +33,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/display/clarion_2dg.h"
 #include "hw/arm/boot.h"
 #include "hw/intc/arm_gic.h"
 #include "hw/display/clarion_du.h"
@@ -1959,6 +1960,7 @@ struct Qy8MachineState {
     DeviceState *ehci;
     DeviceState *ohci;
     DeviceState *sgx;         /* PowerVR SGX @0xFCE00000 */
+    DeviceState *g2d;
     Qy8Tmu tmu;
     Qy8Gpio gpio[QY8_GPIO_BANKS];
     Qy8Bctl bctl;
@@ -1989,6 +1991,8 @@ struct Qy8MachineState {
     char *board;                /* property value: "auto", a model, an alias */
     const struct Qy8BoardInfo *board_info; /* resolved in qy8_init() */
     bool reverse;               /* RV input, machine property */
+    bool g2d_on;
+    char *g2d_log;
     char *render;
     char *render_lib;
     char *render_log;
@@ -2472,6 +2476,17 @@ static void qy8_init(MachineState *machine)
                        qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
     sysbus_connect_irq(gicbusdev, 1,
                        qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_FIQ));
+
+    if (s->g2d_on) {
+        s->g2d = qdev_new(TYPE_CLARION_2DG);
+        if (s->g2d_log && *s->g2d_log) {
+            qdev_prop_set_string(s->g2d, "log", s->g2d_log);
+        }
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(s->g2d), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(s->g2d), 0, 0xffe80000);
+        sysbus_connect_irq(SYS_BUS_DEVICE(s->g2d), 0,
+                           qdev_get_gpio_in(s->gic, 60));
+    }
 
     /*
      * --- I2C0..I2C2: та сама обмежена модель контролера, шина ПОРОЖНЯ ---
@@ -3131,6 +3146,29 @@ static void qy8_tma460_profile_set(Object *obj, bool value, Error **errp)
     QY8_MACHINE(obj)->tma460_synthetic_profile_on = value;
 }
 
+static bool qy8_g2d_get(Object *obj, Error **errp)
+{
+    return QY8_MACHINE(obj)->g2d_on;
+}
+
+static void qy8_g2d_set(Object *obj, bool value, Error **errp)
+{
+    QY8_MACHINE(obj)->g2d_on = value;
+}
+
+static char *qy8_g2d_log_get(Object *obj, Error **errp)
+{
+    return g_strdup(QY8_MACHINE(obj)->g2d_log);
+}
+
+static void qy8_g2d_log_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    g_free(s->g2d_log);
+    s->g2d_log = g_strdup(value);
+}
+
 static void qy8_machine_instance_init(Object *obj)
 {
     Qy8MachineState *s = QY8_MACHINE(obj);
@@ -3263,6 +3301,16 @@ static void qy8_machine_instance_init(Object *obj)
                              qy8_tma460_profile_set);
     object_property_set_description(obj, "tma460-profile",
         "Minimal synthetic TMA460 System Mode profile with pointer-to-touch input (on by default)");
+
+    s->g2d_on = true;
+    object_property_add_bool(obj, "g2d", qy8_g2d_get, qy8_g2d_set);
+    object_property_set_description(obj, "g2d",
+        "minimal synthetic 2DG completion model (on by default)");
+    s->g2d_log = g_strdup("");
+    object_property_add_str(obj, "g2d-log", qy8_g2d_log_get,
+                            qy8_g2d_log_set);
+    object_property_set_description(obj, "g2d-log",
+        "optional JSONL log of 2DG command lists");
 }
 
 static void qy8_machine_class_init(ObjectClass *oc, const void *data)
