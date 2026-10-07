@@ -13,6 +13,7 @@ system_ss.add(when: 'CONFIG_G364FB', if_true: files('g364fb.c'))
 system_ss.add(when: 'CONFIG_JAZZ_LED', if_true: files('jazz_led.c'))
 system_ss.add(when: 'CONFIG_PL110', if_true: files('pl110.c'))
 system_ss.add(when: 'CONFIG_CLARION_DU', if_true: files('clarion_du.c'))
+system_ss.add(when: 'CONFIG_CLARION_QY8', if_true: files('clarion_2dg.c'))
 system_ss.add(when: 'CONFIG_CLARION_SGX', if_true: files('clarion_sgx.c'))
 if get_option('plugins')
   system_ss.add(when: 'CONFIG_CLARION_QY8', if_true: [
