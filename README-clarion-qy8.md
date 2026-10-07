@@ -3,20 +3,6 @@
 The `clarion_qy8` branch adds the `clarion-qy8` machine: an emulated board
 of the Clarion QY8XXX head unit (Renesas R-Car).
 
-## 2DG blitter
-
-The `clarion-2dg` model is mapped at `0xffe80000` and provides the register
-readback, synthetic blit completion interrupt, and command-list diagnostics
-needed by the guest driver. It does not execute the command list or draw
-pixels. Completion follows a synthetic 1 ms virtual-clock delay; the
-`+0x0c` bit 0 interrupt-enable interpretation is also synthetic. The model
-is enabled by default and can be disabled with
-`-M clarion-qy8,g2d=off` (or `QY8_G2D=off` with `tools/qy8_run.sh`).
-
-Set `g2d-log=/path/to/file.jsonl` to append one JSON record per start,
-including the virtual-clock timestamp, list address, and first 256 words.
-This log is disabled by default.
-
 No guest image is included in this repository. The machine boots from a
 raw 64 MiB flash image that you supply.
 
@@ -98,6 +84,8 @@ the same command line is merged with the first.
 | `micom` | `on` | built-in companion MCU on SCIF4; `off` lets you attach your own responder via `-serial` |
 | `dispmicom` | `on` | built-in display panel MCU on SCIF1; `off` works the same way |
 | `gps` | `on` | built-in u-blox GNSS receiver on SCIF2; `off` leaves SCIF2 on `-serial` index 3 |
+| `g2d` | `on` | minimal 2DG blitter model: completes blits for the guest driver, draws nothing; `off` leaves the block unmodelled |
+| `g2d-log` | unset | file that receives one JSON line per 2DG start (list address, first 256 words) |
 | `gps-lat` | `50.4501` | fix latitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-speed` | `0` | speed in knots; a nonzero value advances the position |
@@ -157,6 +145,20 @@ Use `gps=off` to leave SCIF2 available through `-serial 3`. The position
 properties accept decimal strings; for example, a QMP `qom-set` of `gps-lat`
 or `gps-lon` changes the next receiver update. The clock comes from QEMU's
 guest RTC, so `-rtc base=...` makes runs reproducible.
+
+### 2DG blitter
+
+The `clarion-2dg` model is mapped at `0xffe80000` and provides the register
+readback, synthetic blit completion interrupt, and command-list diagnostics
+needed by the guest driver. It does not execute the command list or draw
+pixels. Completion follows a synthetic 1 ms virtual-clock delay; the
+`+0x0c` bit 0 interrupt-enable interpretation is also synthetic. The model
+is enabled by default and can be disabled with
+`-M clarion-qy8,g2d=off` (or `QY8_G2D=off` with `tools/qy8_run.sh`).
+
+Set `g2d-log=/path/to/file.jsonl` to append one JSON record per start,
+including the virtual-clock timestamp, list address, and first 256 words.
+This log is disabled by default.
 
 ## 5. Serial ports and SD cards
 
