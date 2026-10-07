@@ -44,6 +44,7 @@
 #include "monitor/qdev.h"
 #include "hw/display/clarion_sgx.h"
 #include "hw/misc/clarion_micom.h"
+#include "hw/misc/clarion_shcore.h"
 #include "hw/misc/clarion_dispmicom.h"
 #include "hw/misc/clarion_ublox.h"
 #include "hw/dma/clarion_hpbdma.h"
@@ -169,6 +170,8 @@
 #define QY8_DU_SPI          31          /* підтверджено таблицями OAL */
 #define QY8_I2C4_SPI        77          /* GIC ID 109 = SPI 77 */
 #define QY8_GPIO4_SPI       103         /* GIC ID 135 = SPI 103 */
+#define QY8_SHCORE_SPI      54          /* GIC INTID 86 = SPI 54 */
+#define QY8_SHCORE_BASE     0xFE700000
 
 #define QY8_SCIF_BASE       0xFFE40000      /* scif0..scif5, крок 0x1000 */
 #define QY8_SCIF_STRIDE     0x1000
@@ -1889,7 +1892,9 @@ static const MemoryRegionOps qy8_mstp_ops = {
 #define QY8_INT2_STATUS_SDHI0   0xFE7820F4
 #define QY8_INT2_STATUS_SDHI1   0xFE7820F8
 #define QY8_INT2_STATUS_USB     0xFE782058
+#define QY8_INT2_STATUS_SHCORE 0xFE78208C
 #define QY8_INT2_BIT            (1u << 0)   /* біт у слові — не доведений */
+#define QY8_INT2_SHCORE_BIT     0x10000    /* підтверджено для IRQ 86 */
 
 typedef struct Qy8Int2Line {
     MemoryRegion mr;
@@ -1961,6 +1966,7 @@ struct Qy8MachineState {
     DeviceState *ohci;
     DeviceState *sgx;         /* PowerVR SGX @0xFCE00000 */
     DeviceState *g2d;
+    DeviceState *shcore;
     Qy8Tmu tmu;
     Qy8Gpio gpio[QY8_GPIO_BANKS];
     Qy8Bctl bctl;
@@ -1969,6 +1975,7 @@ struct Qy8MachineState {
     Qy8Int2Line int2_du;
     Qy8Int2Line int2_sdhi[QY8_NUM_SDHI];
     Qy8Int2Line int2_usb;
+    Qy8Int2Line int2_shcore;
     Qy8Mstp mstp[QY8_NUM_MSTP];
     Qy8Periph periph;
     MemoryRegion voidmr;
@@ -1992,6 +1999,7 @@ struct Qy8MachineState {
     const struct Qy8BoardInfo *board_info; /* resolved in qy8_init() */
     bool reverse;               /* RV input, machine property */
     bool g2d_on;
+    bool shcore_on;
     char *g2d_log;
     char *render;
     char *render_lib;
@@ -2028,6 +2036,16 @@ static void qy8_sdhi_irq(void *opaque, int n, int level)
 
     s->int2_sdhi[n].pending = level ? QY8_INT2_BIT : 0;
     qemu_set_irq(qdev_get_gpio_in(s->gic, QY8_SDHI_SPI0 + n), level);
+}
+
+/* SH-core IRQ 86 is demultiplexed through the confirmed INTC2 status bit. */
+static void qy8_shcore_irq(void *opaque, int n, int level)
+{
+    Qy8MachineState *s = opaque;
+
+    (void)n;
+    s->int2_shcore.pending = level ? QY8_INT2_SHCORE_BIT : 0;
+    qemu_set_irq(qdev_get_gpio_in(s->gic, QY8_SHCORE_SPI), level);
 }
 
 /* n = 0 OHCI, 1 EHCI: one GIC line, the demux tells them apart by bit */
@@ -2488,6 +2506,14 @@ static void qy8_init(MachineState *machine)
                            qdev_get_gpio_in(s->gic, 60));
     }
 
+    if (s->shcore_on) {
+        s->shcore = qdev_new(TYPE_CLARION_SHCORE);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(s->shcore), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(s->shcore), 0, QY8_SHCORE_BASE);
+        sysbus_connect_irq(SYS_BUS_DEVICE(s->shcore), 0,
+                           qemu_allocate_irq(qy8_shcore_irq, s, 0));
+    }
+
     /*
      * --- I2C0..I2C2: та сама обмежена модель контролера, шина ПОРОЖНЯ ---
      *
@@ -2768,6 +2794,10 @@ static void qy8_init(MachineState *machine)
                        QY8_INT2_STATUS_SDHI1);
     qy8_int2_line_init(sysmem, &s->int2_usb, "qy8.int2.usb",
                        QY8_INT2_STATUS_USB);
+    if (s->shcore_on) {
+        qy8_int2_line_init(sysmem, &s->int2_shcore, "qy8.int2.shcore",
+                           QY8_INT2_STATUS_SHCORE);
+    }
 
     /*
      * CPG MSTPCR: шість окремих чотирибайтових вікон із пріоритетом 1 над
@@ -3156,6 +3186,16 @@ static void qy8_g2d_set(Object *obj, bool value, Error **errp)
     QY8_MACHINE(obj)->g2d_on = value;
 }
 
+static bool qy8_shcore_get(Object *obj, Error **errp)
+{
+    return QY8_MACHINE(obj)->shcore_on;
+}
+
+static void qy8_shcore_set(Object *obj, bool value, Error **errp)
+{
+    QY8_MACHINE(obj)->shcore_on = value;
+}
+
 static char *qy8_g2d_log_get(Object *obj, Error **errp)
 {
     return g_strdup(QY8_MACHINE(obj)->g2d_log);
@@ -3306,6 +3346,11 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_add_bool(obj, "g2d", qy8_g2d_get, qy8_g2d_set);
     object_property_set_description(obj, "g2d",
         "minimal synthetic 2DG completion model (on by default)");
+
+    s->shcore_on = false;
+    object_property_add_bool(obj, "shcore", qy8_shcore_get, qy8_shcore_set);
+    object_property_set_description(obj, "shcore",
+        "synthetic SH initialization-end response (off by default)");
     s->g2d_log = g_strdup("");
     object_property_add_str(obj, "g2d-log", qy8_g2d_log_get,
                             qy8_g2d_log_set);
