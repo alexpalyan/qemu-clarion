@@ -82,12 +82,20 @@ static void clarion_shcore_write(void *opaque, hwaddr offset, uint64_t value,
         return;
     }
 
-    if (offset == CLARION_SHCORE_STATUS && value == CLARION_SHCORE_ACK) {
+    if (offset == CLARION_SHCORE_STATUS && (value & CLARION_SHCORE_ACK)) {
         if (s->regs[CLARION_SHCORE_STATUS / 4] & CLARION_SHCORE_INIT_END) {
             s->regs[CLARION_SHCORE_STATUS / 4] &= ~CLARION_SHCORE_INIT_END;
             clarion_shcore_update_irq(s);
             qemu_log_mask(LOG_UNIMP, "clarion-shcore: init end acknowledged\n");
         }
+        return;
+    }
+
+    if (offset == CLARION_SHCORE_STATUS) {
+        uint32_t init_end = s->regs[offset / 4] & CLARION_SHCORE_INIT_END;
+
+        s->regs[offset / 4] = (value & ~CLARION_SHCORE_INIT_END) | init_end;
+        clarion_shcore_update_irq(s);
         return;
     }
 

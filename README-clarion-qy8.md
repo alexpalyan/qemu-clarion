@@ -86,7 +86,7 @@ the same command line is merged with the first.
 | `gps` | `on` | built-in u-blox GNSS receiver on SCIF2; `off` leaves SCIF2 on `-serial` index 3 |
 | `g2d` | `on` | minimal 2DG blitter model: completes blits for the guest driver, draws nothing; `off` leaves the block unmodelled |
 | `g2d-log` | unset | file that receives one JSON line per 2DG start (list address, first 256 words) |
-| `shcore` | `off` | synthetic SH initialization-end response on GIC SPI 54; `off` leaves HPB unmodelled |
+| `shcore` | `on` | synthetic SH initialization-end response on GIC SPI 54; `off` leaves HPB unmodelled |
 | `gps-lat` | `50.4501` | fix latitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-speed` | `0` | speed in knots; a nonzero value advances the position |
@@ -163,16 +163,16 @@ This log is disabled by default.
 
 ### SH core host interface
 
-The opt-in `clarion-shcore` model is mapped at `0xfe700000` with a `0x3c`-byte
-register window. GIC SPI 54 is demultiplexed through INTC2 status word
+The `clarion-shcore` model is enabled by default and mapped at `0xfe700000`
+with a `0x3c`-byte register window. GIC SPI 54 is demultiplexed through INTC2 status word
 `0xfe78208c`, bit `0x10000`. A guest write with bit 0 set to HPB `+0x04`
 arms or rearms a synthetic 100 ms virtual-clock delay. When it expires, the
 model sets `+0x1c` bit 2 and raises the level-triggered interrupt. A guest
-write of `0x100` to `+0x1c` acknowledges the event and lowers the line. Reads
-of `+0x08` always return zero and reads of `+0x30` always return bit 0 clear;
-`+0x34` retains writes. The model does not implement SH shared-memory message
-queues. The trigger, delay, and register-bit meanings are synthetic. Enable it with
-`-M clarion-qy8,shcore=on` (or `QY8_SHCORE=on` with `tools/qy8_run.sh`).
+write with bit `0x100` set to `+0x1c` acknowledges the event and lowers the
+line. Reads of `+0x08` always return zero and reads of `+0x30` always return
+bit 0 clear; `+0x34` retains writes. The model does not implement SH shared-memory message
+queues. The trigger, delay, and register-bit meanings are synthetic. Disable it
+with `-M clarion-qy8,shcore=off` (or `QY8_SHCORE=off` with `tools/qy8_run.sh`).
 
 ## 5. Serial ports and SD cards
 

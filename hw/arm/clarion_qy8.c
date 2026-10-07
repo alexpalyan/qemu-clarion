@@ -3347,10 +3347,10 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_set_description(obj, "g2d",
         "minimal synthetic 2DG completion model (on by default)");
 
-    s->shcore_on = false;
+    s->shcore_on = true;
     object_property_add_bool(obj, "shcore", qy8_shcore_get, qy8_shcore_set);
     object_property_set_description(obj, "shcore",
-        "synthetic SH initialization-end response (off by default)");
+        "synthetic SH initialization-end response (on by default)");
     s->g2d_log = g_strdup("");
     object_property_add_str(obj, "g2d-log", qy8_g2d_log_get,
                             qy8_g2d_log_set);
