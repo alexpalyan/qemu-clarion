@@ -3,6 +3,20 @@
 The `clarion_qy8` branch adds the `clarion-qy8` machine: an emulated board
 of the Clarion QY8XXX head unit (Renesas R-Car).
 
+## 2DG blitter
+
+The `clarion-2dg` model is mapped at `0xffe80000` and provides the register
+readback, synthetic blit completion interrupt, and command-list diagnostics
+needed by the guest driver. It does not execute the command list or draw
+pixels. Completion follows a synthetic 1 ms virtual-clock delay; the
+`+0x0c` bit 0 interrupt-enable interpretation is also synthetic. The model
+is enabled by default and can be disabled with
+`-M clarion-qy8,g2d=off` (or `QY8_G2D=off` with `tools/qy8_run.sh`).
+
+Set `g2d-log=/path/to/file.jsonl` to append one JSON record per start,
+including the virtual-clock timestamp, list address, and first 256 words.
+This log is disabled by default.
+
 No guest image is included in this repository. The machine boots from a
 raw 64 MiB flash image that you supply.
 
