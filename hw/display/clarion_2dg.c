@@ -19,6 +19,7 @@
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "qemu/bswap.h"
+#include <math.h>
 
 #define CLARION_2DG_SIZE 0x200
 #define CLARION_2DG_REGS (CLARION_2DG_SIZE / sizeof(uint32_t))
@@ -36,12 +37,13 @@
 #define CLARION_2DG_HDR_MAGIC 0x52473130u /* 'RG10', 0x70 bytes before list */
 #define CLARION_2DG_HDR_BACK 0x70
 #define CLARION_2DG_HDR_LEN 0x08 /* byte offset of the length field */
-#define CLARION_2DG_MAX_WORDS 65536
+#define CLARION_2DG_MAX_WORDS (1 << 20)
 #define CLARION_2DG_FALLBACK_WORDS 16384
-#define CLARION_2DG_MAX_PATH 256
+#define CLARION_2DG_MAX_PATH 4096
 #define CLARION_2DG_MAX_DIM 8192
 #define CLARION_2DG_MAX_TEX 128
 #define CLARION_2DG_MAX_CALL 4
+#define CLARION_2DG_WALK_SLACK 64
 
 /* Command opcodes (bits 31..24 of the first word). */
 #define M2DG_TRAP 0x00
@@ -60,6 +62,7 @@
 #define M2DG_BITBLTK 0xa8
 #define M2DG_BITBLTR 0xaa
 #define M2DG_LINE 0xb0
+#define M2DG_LINE_B1 0xb1
 #define M2DG_LINE_NC 0xb3
 #define M2DG_CLIPPATH 0xd0
 #define M2DG_CLIPRECT 0xe0
@@ -74,6 +77,8 @@
 #define M2DG_R_DST 0x50
 #define M2DG_R_SRC_STRIDE 0x58
 #define M2DG_R_DST_STRIDE 0x5c
+#define M2DG_R_STRANS 0x80
+#define M2DG_R_ALPHA 0x88
 #define M2DG_R_CTRL 0xc0
 #define M2DG_R_SYSCLIP 0xd0
 #define M2DG_R_CLIP_MIN 0xdc
@@ -86,6 +91,11 @@ struct Clarion2DGState {
     QEMUTimer *timer;
     uint32_t regs[CLARION_2DG_REGS];
     char *log_path;
+    char *diag_path;
+    uint32_t diag_n;
+    int64_t diag_trap;
+    int64_t diag_ops[256];
+    unsigned diag_count[256];
     bool exec;
     /* Command-list register file; persists across lists, not migrated. */
     uint32_t lreg[CLARION_2DG_LREGS / 4];
@@ -113,6 +123,7 @@ typedef struct ListCtx {
     unsigned path_n;
     int px[CLARION_2DG_MAX_PATH];
     int py[CLARION_2DG_MAX_PATH];
+    double pxs[CLARION_2DG_MAX_PATH];
     /* Statistics. */
     unsigned done[256];
     unsigned skipped[256];
@@ -237,22 +248,52 @@ static bool clarion_2dg_in_poly(const int *vx, const int *vy, unsigned n,
     return inside;
 }
 
-/* Fill a polygon; tex (w x h, or NULL) selects texture or solid colour. */
+/* Sorted x crossings of a closed polygon with the scanline at y (<= n). */
+static unsigned clarion_2dg_crossings(const int *vx, const int *vy, unsigned n,
+                                      int y, double *xs)
+{
+    unsigned i, j, k = 0, m;
+
+    for (i = 0, j = n - 1; i < n; j = i++) {
+        if ((vy[i] > y) != (vy[j] > y)) {
+            xs[k++] = (double)(vx[j] - vx[i]) * (y - vy[i]) /
+                      (vy[j] - vy[i]) + vx[i];
+        }
+    }
+    for (i = 1; i < k; i++) { /* insertion sort: k is small */
+        double v = xs[i];
+
+        for (m = i; m > 0 && xs[m - 1] > v; m--) {
+            xs[m] = xs[m - 1];
+        }
+        xs[m] = v;
+    }
+    return k;
+}
+
+/*
+ * Fill a polygon; tex (w x h, or NULL) selects texture or solid colour.
+ * Even-odd rule by scanline spans; the edges are then drawn one pixel wide
+ * (approximates the earlier half-pixel-from-edge test at a fraction of the
+ * cost). An active clip path is applied per pixel.
+ */
 static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
                                   unsigned n, uint16_t colour,
                                   const uint16_t *tex, unsigned tw, unsigned th)
 {
-    int cx0, cy0, cx1, cy1, minx = INT_MAX, miny = INT_MAX;
-    int maxx = INT_MIN, maxy = INT_MIN, x, y;
-    unsigned i;
+    int cx0, cy0, cx1, cy1, miny = INT_MAX, maxy = INT_MIN, x, y;
+    double xs[16];
+    unsigned i, k, e;
+
+    if (n > ARRAY_SIZE(xs)) {
+        return;
+    }
 
     if (!clarion_2dg_dst_map(c) ||
         !clarion_2dg_clip(c, &cx0, &cy0, &cx1, &cy1)) {
         return;
     }
     for (i = 0; i < n; i++) {
-        minx = MIN(minx, vx[i]);
-        maxx = MAX(maxx, vx[i]);
         miny = MIN(miny, vy[i]);
         maxy = MAX(maxy, vy[i]);
     }
@@ -262,21 +303,66 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
         cx1 = MIN(cx1, c->rx1);
         cy1 = MIN(cy1, c->ry1);
     }
-    minx = MAX(minx, cx0);
     miny = MAX(miny, cy0);
-    maxx = MIN(maxx, cx1);
     maxy = MIN(maxy, cy1);
     for (y = miny; y <= maxy; y++) {
-        for (x = minx; x <= maxx; x++) {
-            if (!clarion_2dg_in_poly(vx, vy, n, x, y)) {
+        k = clarion_2dg_crossings(vx, vy, n, y, xs);
+        unsigned pk = c->path_on ?
+            clarion_2dg_crossings(c->px, c->py, c->path_n, y, c->pxs) : 0;
+
+        for (i = 0; i + 1 < k; i += 2) {
+            int xa = MAX((int)ceil(xs[i]), cx0);
+            int xb = MIN((int)ceil(xs[i + 1]) - 1, cx1);
+
+            if (!c->path_on) {
+                for (x = xa; x <= xb; x++) {
+                    clarion_2dg_put(c, x, y, tex ? tex[(y % th) * tw + (x % tw)]
+                                                 : colour);
+                }
                 continue;
             }
-            if (c->path_on &&
-                !clarion_2dg_in_poly(c->px, c->py, c->path_n, x, y)) {
-                continue;
+            for (e = 0; e + 1 < pk; e += 2) {
+                int pa = MAX(xa, (int)ceil(c->pxs[e]));
+                int pb = MIN(xb, (int)ceil(c->pxs[e + 1]) - 1);
+
+                for (x = pa; x <= pb; x++) {
+                    clarion_2dg_put(c, x, y, tex ? tex[(y % th) * tw + (x % tw)]
+                                                 : colour);
+                }
             }
-            clarion_2dg_put(c, x, y,
-                            tex ? tex[(y % th) * tw + (x % tw)] : colour);
+        }
+    }
+    /* Edge pixels. */
+    for (e = 0; e < n; e++) {
+        int x0 = vx[e], y0 = vy[e], x1 = vx[(e + 1) % n], y1 = vy[(e + 1) % n];
+        int dx = abs(x1 - x0), dy = -abs(y1 - y0);
+        int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+
+        if (MAX(abs(x1 - x0), abs(y1 - y0)) > 4 * CLARION_2DG_MAX_DIM) {
+            continue;
+        }
+        for (;;) {
+            if (x0 >= cx0 && x0 <= cx1 && y0 >= cy0 && y0 <= cy1 &&
+                (!c->path_on ||
+                 clarion_2dg_in_poly(c->px, c->py, c->path_n, x0, y0))) {
+                clarion_2dg_put(c, x0, y0,
+                                tex ? tex[(y0 % th) * tw + (x0 % tw)] : colour);
+            }
+            if (x0 == x1 && y0 == y1) {
+                break;
+            }
+            {
+                int e2 = 2 * err;
+
+                if (e2 >= dy) {
+                    err += dy;
+                    x0 += sx;
+                }
+                if (e2 <= dx) {
+                    err += dx;
+                    y0 += sy;
+                }
+            }
         }
     }
 }
@@ -302,16 +388,18 @@ static void clarion_2dg_fill_rect(ListCtx *c, int x0, int y0, int x1, int y1,
 }
 
 /*
- * Source-to-canvas blit. key >= 0 selects colour-key mode: pixels with the
- * ARGB1555 alpha bit clear are skipped. The literal key word (0x7fff in all
- * captured lists) left the 0x0000 background opaque, so it is not compared.
+ * Source-to-canvas blit of 16-bit pixels (stride in pixels). With strans set,
+ * pixels equal to the transparent colour in list register 0x80 are skipped
+ * (BITBLTA with the 0x0800 header bit; seen in captured icon blits, whose
+ * background is exactly that value). Otherwise a plain copy.
  */
 static void clarion_2dg_blit(ListCtx *c, int sx, int sy, int w, int h, int dx,
-                             int dy, int key)
+                             int dy, bool strans)
 {
     Clarion2DGState *s = c->s;
     hwaddr src = s->lreg[M2DG_R_SRC / 4];
     uint32_t sstride = s->lreg[M2DG_R_SRC_STRIDE / 4];
+    uint16_t key = s->lreg[M2DG_R_STRANS / 4];
     uint16_t row[CLARION_2DG_MAX_DIM];
     int cx0, cy0, cx1, cy1, i, j;
 
@@ -336,10 +424,70 @@ static void clarion_2dg_blit(ListCtx *c, int sx, int sy, int w, int h, int dx,
             int x = dx + i;
             uint16_t v = lduw_le_p(&row[i]);
 
-            if (x < cx0 || x > cx1 || (key >= 0 && !(v & 0x8000))) {
+            if (x < cx0 || x > cx1 || (strans && v == key)) {
                 continue;
             }
             clarion_2dg_put(c, x, y, v);
+        }
+    }
+}
+
+/* Blend colour over dst per 5-bit channel with coverage a (0..255). */
+static inline uint16_t clarion_2dg_mix(uint16_t dst, uint16_t col, unsigned a)
+{
+    uint16_t out = dst & 0x8000;
+    int sh;
+
+    for (sh = 0; sh < 15; sh += 5) {
+        int d = (dst >> sh) & 31, f = (col >> sh) & 31;
+
+        out |= (uint16_t)((d * (255 - a) + f * a + 127) / 255) << sh;
+    }
+    return out;
+}
+
+/*
+ * BITBLTK: 8-bit coverage mask (stride in bytes, list register 0x58) painted
+ * in colour over the canvas, scaled by the global alpha in register 0x88.
+ */
+static void clarion_2dg_blit_mask(ListCtx *c, int sx, int sy, int w, int h,
+                                  int dx, int dy, uint16_t colour)
+{
+    Clarion2DGState *s = c->s;
+    hwaddr src = s->lreg[M2DG_R_SRC / 4];
+    uint32_t sstride = s->lreg[M2DG_R_SRC_STRIDE / 4];
+    unsigned galpha = s->lreg_set[M2DG_R_ALPHA / 4] ?
+                      s->lreg[M2DG_R_ALPHA / 4] & 0xff : 0xff;
+    uint8_t row[CLARION_2DG_MAX_DIM];
+    int cx0, cy0, cx1, cy1, i, j;
+
+    if (!clarion_2dg_dst_map(c) || !clarion_2dg_clip(c, &cx0, &cy0, &cx1, &cy1)
+        || !s->lreg_set[M2DG_R_SRC / 4] || !sstride ||
+        w <= 0 || h <= 0 || w > CLARION_2DG_MAX_DIM) {
+        return;
+    }
+    for (j = 0; j < h; j++) {
+        int y = dy + j;
+
+        if (y < cy0 || y > cy1) {
+            continue;
+        }
+        if (address_space_read(
+                &address_space_memory,
+                src + (hwaddr)(sy + j) * sstride + sx,
+                MEMTXATTRS_UNSPECIFIED, row, w) != MEMTX_OK) {
+            continue;
+        }
+        for (i = 0; i < w; i++) {
+            int x = dx + i;
+            unsigned a = row[i] * galpha / 255;
+            uint16_t *p;
+
+            if (!a || x < cx0 || x > cx1) {
+                continue;
+            }
+            p = (uint16_t *)(c->dst + ((size_t)y * c->dst_stride + x) * 2);
+            stw_le_p(p, clarion_2dg_mix(lduw_le_p(p), colour, a));
         }
     }
 }
@@ -438,6 +586,67 @@ static void clarion_2dg_set_lreg(Clarion2DGState *s, uint32_t reg,
     s->lreg_set[reg / 4] = true;
 }
 
+
+/* Diagnostic: append one JSON line to the diag file (no-op when unset). */
+static void clarion_2dg_diag_line(Clarion2DGState *s, const char *line)
+{
+    FILE *file = fopen(s->diag_path, "a");
+
+    if (file) {
+        fputs(line, file);
+        fclose(file);
+    }
+}
+
+/* Diagnostic: dump the first diag-n blits of each kind with source pixels. */
+static void clarion_2dg_diag_blit(ListCtx *c, uint32_t w, const uint32_t *a,
+                                  hwaddr pc)
+{
+    Clarion2DGState *s = c->s;
+    unsigned op = w >> 24, i;
+    int l = a[2] >> 16, r = a[2] & 0xffff, u = a[3] >> 16, d = a[3] & 0xffff;
+    int bw = l + r + 1, bh = u + d + 1;
+    uint32_t sstride = s->lreg[M2DG_R_SRC_STRIDE / 4];
+    GString *g;
+
+    if (!s->diag_path || !*s->diag_path || op == M2DG_BITBLTC ||
+        s->diag_count[op]++ >= s->diag_n) {
+        return;
+    }
+    g = g_string_new(NULL);
+    g_string_append_printf(g, "{\"pc\":%" PRIu64 ",\"w\":%u,"
+                           "\"a\":[%u,%u,%u,%u,%u],\"regs\":{",
+                           (uint64_t)pc, w, a[0], a[1], a[2], a[3], a[4]);
+    for (i = 0; i < CLARION_2DG_LREGS / 4; i++) {
+        if (s->lreg_set[i]) {
+            g_string_append_printf(g, "%s\"%x\":%u",
+                                   g->str[g->len - 1] == '{' ? "" : ",", i * 4,
+                                   s->lreg[i]);
+        }
+    }
+    g_string_append_printf(g, "},\"bw\":%d,\"bh\":%d,\"src\":[", bw, bh);
+    if (bw > 0 && bh > 0 && bw <= 256 && bh <= 256 && sstride) {
+        int j, k;
+
+        for (j = 0; j < bh; j++) {
+            for (k = 0; k < bw; k++) {
+                uint16_t v = 0;
+
+                address_space_read(&address_space_memory,
+                                   s->lreg[M2DG_R_SRC / 4] +
+                                   (((hwaddr)(clarion_2dg_xy_y(a[1]) + j) *
+                                     sstride) + clarion_2dg_xy_x(a[1]) + k) * 2,
+                                   MEMTXATTRS_UNSPECIFIED, &v, 2);
+                g_string_append_printf(g, "%s%u", (j || k) ? "," : "",
+                                       le16_to_cpu(v));
+            }
+        }
+    }
+    g_string_append(g, "]}\n");
+    clarion_2dg_diag_line(s, g->str);
+    g_string_free(g, true);
+}
+
 /*
  * Walk and execute one command list. Returns the number of words walked.
  * max_words bounds the walk; the list normally ends with a TRAP word.
@@ -450,10 +659,15 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
     hwaddr ret = 0;
     unsigned depth = 0, walked = 0;
     bool stop = false;
+    unsigned prev_op = 0;
+    int64_t t_prev = g_get_monotonic_time();
     uint16_t t16[CLARION_2DG_MAX_TEX * CLARION_2DG_MAX_TEX];
 
     c->s = s;
-    while (!stop && walked < max_words) {
+    s->diag_trap = -1;
+    memset(s->diag_ops, 0, sizeof(s->diag_ops));
+    /* Sub-list words count too, so allow slack past the header length. */
+    while (!stop && walked < max_words + CLARION_2DG_WALK_SLACK) {
         uint32_t w, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0;
         unsigned op, lo, words = 1;
 
@@ -462,6 +676,13 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
             break;
         }
         op = w >> 24;
+        if (s->diag_path) {
+            int64_t now = g_get_monotonic_time();
+
+            s->diag_ops[prev_op] += now - t_prev;
+            t_prev = now;
+            prev_op = op;
+        }
         lo = w & 0xff;
         clarion_2dg_rd32(pc + 4, &a1);
         clarion_2dg_rd32(pc + 8, &a2);
@@ -475,6 +696,7 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                 goto unknown;
             }
             stop = true;
+            s->diag_trap = walked;
             break;
         case M2DG_NOP:
         case M2DG_SYNC:
@@ -570,18 +792,21 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
             int cx = clarion_2dg_xy_x(a5), cy = clarion_2dg_xy_y(a5);
             int l = a3 >> 16, r = a3 & 0xffff, u = a4 >> 16, d = a4 & 0xffff;
             bool drawn = true;
+            const uint32_t av[5] = { a1, a2, a3, a4, a5 };
 
             words = 6;
+            clarion_2dg_diag_blit(c, w, av, pc);
             if (op == M2DG_BITBLTC) {
                 clarion_2dg_fill_rect(c, cx - l, cy - u, cx + r, cy + d,
                                       a2 & 0xffff);
             } else if (op == M2DG_BITBLTK) {
+                clarion_2dg_blit_mask(c, clarion_2dg_xy_x(a2),
+                                      clarion_2dg_xy_y(a2), l + r + 1,
+                                      u + d + 1, cx - l, cy - u, a1 & 0xffff);
+            } else if (op == M2DG_BITBLTA) {
                 clarion_2dg_blit(c, clarion_2dg_xy_x(a2), clarion_2dg_xy_y(a2),
                                  l + r + 1, u + d + 1, cx - l, cy - u,
-                                 a1 & 0xffff);
-            } else if (op == M2DG_BITBLTA && !(w & M2DG_F_STRANS)) {
-                clarion_2dg_blit(c, clarion_2dg_xy_x(a2), clarion_2dg_xy_y(a2),
-                                 l + r + 1, u + d + 1, cx - l, cy - u, -1);
+                                 w & M2DG_F_STRANS);
             } else {
                 drawn = false; /* STRANS key and rotated blit unestablished */
             }
@@ -660,6 +885,11 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                 }
             }
             break;
+        case M2DG_LINE_B1:
+            /* Length 8 words inferred from the list ending on its TRAP. */
+            words = 8;
+            c->skipped[op]++;
+            break;
         case M2DG_LINE_NC:
             words = 3; /* no colour word; colour source not established */
             c->skipped[op]++;
@@ -683,6 +913,27 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                       "), list abandoned\n",
                       w, pc, list);
         c->stopped_op = op;
+        if (s->diag_path && *s->diag_path) {
+            GString *ctx = g_string_new(NULL);
+            int k;
+
+            for (k = -24; k < 24; k++) {
+                uint32_t v = 0;
+
+                clarion_2dg_rd32(pc + k * 4, &v);
+                g_string_append_printf(ctx, "%s%u", k > -24 ? "," : "", v);
+            }
+            clarion_2dg_diag_line(s, g_strdup_printf(
+                "{\"ctx\":[%s]}\n", ctx->str));
+            g_string_free(ctx, true);
+        }
+        if (s->diag_path && *s->diag_path) {
+            g_autofree char *l = g_strdup_printf(
+                "{\"unknown\":%u,\"pc\":%" PRIu64 ",\"list\":%" PRIu64
+                ",\"walked\":%u,\"a1\":%u,\"a2\":%u}\n", w, (uint64_t)pc,
+                (uint64_t)list, walked, a1, a2);
+            clarion_2dg_diag_line(s, l);
+        }
         break;
     }
     clarion_2dg_dst_release(c);
@@ -776,10 +1027,6 @@ static void clarion_2dg_complete(void *opaque)
 
     s->regs[CLARION_2DG_STATUS / 4] |= CLARION_2DG_DONE;
     clarion_2dg_update_irq(s);
-    qemu_log_mask(LOG_UNIMP, "clarion-2dg: completion status=%08x irq=%u\n",
-                  s->regs[CLARION_2DG_STATUS / 4],
-                  !!((s->regs[CLARION_2DG_STATUS / 4] & CLARION_2DG_DONE) &&
-                     (s->regs[CLARION_2DG_IRQ_ENABLE / 4] & 1)));
 }
 
 static uint64_t clarion_2dg_read(void *opaque, hwaddr offset, unsigned size)
@@ -790,10 +1037,6 @@ static uint64_t clarion_2dg_read(void *opaque, hwaddr offset, unsigned size)
     if (size == 4 && offset < CLARION_2DG_SIZE && !(offset & 3)) {
         value = s->regs[offset / 4];
     }
-    qemu_log_mask(LOG_UNIMP,
-                  "clarion-2dg: read offset=%03" HWADDR_PRIx
-                  " size=%u value=%08x\n",
-                  offset, size, value);
     return value;
 }
 
@@ -811,10 +1054,6 @@ static void clarion_2dg_write(void *opaque, hwaddr offset, uint64_t value,
                       offset, size, value);
         return;
     }
-    qemu_log_mask(LOG_UNIMP,
-                  "clarion-2dg: write offset=%03" HWADDR_PRIx
-                  " value=%08" PRIx64 "\n",
-                  offset, value);
     if (offset == CLARION_2DG_STATUS) {
         return;
     }
@@ -823,7 +1062,6 @@ static void clarion_2dg_write(void *opaque, hwaddr offset, uint64_t value,
             (s->regs[CLARION_2DG_STATUS / 4] & CLARION_2DG_DONE)) {
             s->regs[CLARION_2DG_STATUS / 4] &= ~CLARION_2DG_DONE;
             clarion_2dg_update_irq(s);
-            qemu_log_mask(LOG_UNIMP, "clarion-2dg: acknowledge\n");
         }
         s->regs[offset / 4] = value;
         return;
@@ -838,26 +1076,56 @@ static void clarion_2dg_write(void *opaque, hwaddr offset, uint64_t value,
             qemu_log_mask(LOG_GUEST_ERROR,
                           "clarion-2dg: start while previous blit pending\n");
         }
-        qemu_log_mask(LOG_UNIMP, "clarion-2dg: start list=%08x first_words=",
-                      s->regs[CLARION_2DG_LIST / 4]);
-        for (unsigned i = 0; i < 16; i++) {
-            uint32_t word = 0;
-
-            address_space_read(&address_space_memory,
-                               s->regs[CLARION_2DG_LIST / 4] + i * 4,
-                               MEMTXATTRS_UNSPECIFIED, (uint8_t *)&word, 4);
-            qemu_log_mask(LOG_UNIMP, "%s%08x", i ? "," : " ",
-                          le32_to_cpu(word));
-        }
-        qemu_log_mask(LOG_UNIMP, "\n");
         hdr_words = clarion_2dg_hdr_words(s->regs[CLARION_2DG_LIST / 4]);
         clarion_2dg_log_list(s, s->regs[CLARION_2DG_LIST / 4],
                              hdr_words ? hdr_words :
                                          CLARION_2DG_LOG_FALLBACK_WORDS);
-        if (s->exec) {
-            clarion_2dg_run(s, s->regs[CLARION_2DG_LIST / 4],
-                            hdr_words ? hdr_words :
-                                        CLARION_2DG_FALLBACK_WORDS);
+        {
+            int64_t t0 = g_get_monotonic_time();
+            unsigned walked = 0;
+
+            if (s->exec) {
+                walked = clarion_2dg_run(s, s->regs[CLARION_2DG_LIST / 4],
+                                         hdr_words ? hdr_words :
+                                         CLARION_2DG_FALLBACK_WORDS);
+            }
+            if (s->diag_path && *s->diag_path) {
+                GString *ops = g_string_new(NULL);
+                unsigned k;
+
+                for (k = 0; k < 256; k++) {
+                    if (s->diag_ops[k] > 100) {
+                        g_string_append_printf(ops, "%s\"%02x\":%" PRId64,
+                                               ops->len ? "," : "", k,
+                                               s->diag_ops[k]);
+                    }
+                }
+                clarion_2dg_diag_line(s, g_strdup_printf(
+                    "{\"ops\":{%s}}\n", ops->str));
+                g_string_free(ops, true);
+            }
+            if (s->diag_path && *s->diag_path) {
+                g_autofree char *l = g_strdup_printf(
+                    "{\"list\":%u,\"words\":%u,\"hdr_words\":%u,"
+                    "\"us\":%" PRId64 ",\"vt_ns\":%" PRId64
+                    ",\"wall_us\":%" PRId64
+                    ",\"trap\":%" PRId64 ",\"r50\":%u,\"r5c\":%u,"
+                    "\"rd0\":%u,\"rdc\":%u,"
+                    "\"re0\":%u,\"r100\":[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
+                    "%u,%u]}\n",
+                    s->regs[CLARION_2DG_LIST / 4], walked, hdr_words,
+                    g_get_monotonic_time() - t0,
+                    qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL), g_get_real_time(),
+                    s->diag_trap,
+                    s->lreg[0x50 / 4], s->lreg[0x5c / 4], s->lreg[0xd0 / 4],
+                    s->lreg[0xdc / 4], s->lreg[0xe0 / 4], s->lreg[0x100 / 4],
+                    s->lreg[0x104 / 4], s->lreg[0x108 / 4], s->lreg[0x10c / 4],
+                    s->lreg[0x110 / 4], s->lreg[0x114 / 4], s->lreg[0x118 / 4],
+                    s->lreg[0x11c / 4], s->lreg[0x120 / 4], s->lreg[0x124 / 4],
+                    s->lreg[0x128 / 4], s->lreg[0x12c / 4], s->lreg[0x130 / 4],
+                    s->lreg[0x134 / 4]);
+                clarion_2dg_diag_line(s, l);
+            }
         }
         s->regs[CLARION_2DG_STATUS / 4] &= ~CLARION_2DG_DONE;
         clarion_2dg_update_irq(s);
@@ -913,6 +1181,8 @@ static const VMStateDescription vmstate_clarion_2dg = {
 
 static const Property clarion_2dg_properties[] = {
     DEFINE_PROP_STRING("log", Clarion2DGState, log_path),
+    DEFINE_PROP_STRING("diag", Clarion2DGState, diag_path),
+    DEFINE_PROP_UINT32("diag-n", Clarion2DGState, diag_n, 8),
     DEFINE_PROP_BOOL("exec", Clarion2DGState, exec, true),
 };
 
