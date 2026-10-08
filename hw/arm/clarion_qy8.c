@@ -172,6 +172,7 @@
 #define QY8_GPIO4_SPI       103         /* GIC ID 135 = SPI 103 */
 #define QY8_SHCORE_SPI      54          /* GIC INTID 86 = SPI 54 */
 #define QY8_SHCORE_BASE     0xFE700000
+#define QY8_SHCORE_SHARED_BASE 0xFE790000
 
 #define QY8_SCIF_BASE       0xFFE40000      /* scif0..scif5, крок 0x1000 */
 #define QY8_SCIF_STRIDE     0x1000
@@ -2000,6 +2001,8 @@ struct Qy8MachineState {
     bool reverse;               /* RV input, machine property */
     bool g2d_on;
     bool shcore_on;
+    bool shcore_init_only;
+    char *shcore_mode;
     char *g2d_log;
     char *render;
     char *render_lib;
@@ -2508,8 +2511,13 @@ static void qy8_init(MachineState *machine)
 
     if (s->shcore_on) {
         s->shcore = qdev_new(TYPE_CLARION_SHCORE);
+        qdev_prop_set_bit(s->shcore, "init-only", s->shcore_init_only);
         sysbus_realize_and_unref(SYS_BUS_DEVICE(s->shcore), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(s->shcore), 0, QY8_SHCORE_BASE);
+        if (!s->shcore_init_only) {
+            sysbus_mmio_map(SYS_BUS_DEVICE(s->shcore), 1,
+                            QY8_SHCORE_SHARED_BASE);
+        }
         sysbus_connect_irq(SYS_BUS_DEVICE(s->shcore), 0,
                            qemu_allocate_irq(qy8_shcore_irq, s, 0));
     }
@@ -3186,14 +3194,24 @@ static void qy8_g2d_set(Object *obj, bool value, Error **errp)
     QY8_MACHINE(obj)->g2d_on = value;
 }
 
-static bool qy8_shcore_get(Object *obj, Error **errp)
+static char *qy8_shcore_get(Object *obj, Error **errp)
 {
-    return QY8_MACHINE(obj)->shcore_on;
+    return g_strdup(QY8_MACHINE(obj)->shcore_mode);
 }
 
-static void qy8_shcore_set(Object *obj, bool value, Error **errp)
+static void qy8_shcore_set(Object *obj, const char *value, Error **errp)
 {
-    QY8_MACHINE(obj)->shcore_on = value;
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    if (strcmp(value, "on") && strcmp(value, "init") && strcmp(value, "off")) {
+        error_setg(errp, "invalid shcore mode '%s' (expected on, init, or off)",
+                   value);
+        return;
+    }
+    g_free(s->shcore_mode);
+    s->shcore_mode = g_strdup(value);
+    s->shcore_on = strcmp(value, "off") != 0;
+    s->shcore_init_only = strcmp(value, "init") == 0;
 }
 
 static char *qy8_g2d_log_get(Object *obj, Error **errp)
@@ -3347,10 +3365,13 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_set_description(obj, "g2d",
         "minimal synthetic 2DG completion model (on by default)");
 
+    s->shcore_mode = g_strdup("on");
     s->shcore_on = true;
-    object_property_add_bool(obj, "shcore", qy8_shcore_get, qy8_shcore_set);
-    object_property_set_description(obj, "shcore",
-        "synthetic SH initialization-end response (on by default)");
+    object_property_add_str(obj, "shcore", qy8_shcore_get, qy8_shcore_set);
+    object_property_set_description(
+        obj, "shcore",
+        "SH model: on enables synthetic CPUCOM startup, init keeps only "
+        "init-end, off disables it");
     s->g2d_log = g_strdup("");
     object_property_add_str(obj, "g2d-log", qy8_g2d_log_get,
                             qy8_g2d_log_set);

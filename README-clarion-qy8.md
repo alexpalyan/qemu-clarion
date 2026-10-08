@@ -86,7 +86,7 @@ the same command line is merged with the first.
 | `gps` | `on` | built-in u-blox GNSS receiver on SCIF2; `off` leaves SCIF2 on `-serial` index 3 |
 | `g2d` | `on` | minimal 2DG blitter model: completes blits for the guest driver, draws nothing; `off` leaves the block unmodelled |
 | `g2d-log` | unset | file that receives one JSON line per 2DG start (list address, first 256 words) |
-| `shcore` | `on` | synthetic SH initialization-end response on GIC SPI 54; `off` leaves HPB unmodelled |
+| `shcore` | `on` | `on` models synthetic CPUCOM startup and initialization-end; `init` keeps only initialization-end; `off` disables SH modeling |
 | `gps-lat` | `50.4501` | fix latitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-speed` | `0` | speed in knots; a nonzero value advances the position |
@@ -170,9 +170,18 @@ arms or rearms a synthetic 100 ms virtual-clock delay. When it expires, the
 model sets `+0x1c` bit 2 and raises the level-triggered interrupt. A guest
 write with bit `0x100` set to `+0x1c` acknowledges the event and lowers the
 line. Reads of `+0x08` always return zero and reads of `+0x30` always return
-bit 0 clear; `+0x34` retains writes. The model does not implement SH shared-memory message
-queues. The trigger, delay, and register-bit meanings are synthetic. Disable it
-with `-M clarion-qy8,shcore=off` (or `QY8_SHCORE=off` with `tools/qy8_run.sh`).
+bit 0 clear. `shcore=init` preserves this initialization-end-only behavior.
+
+With `shcore=on`, a 0x2000-byte shared CPUCOM window is also mapped at
+`0xfe790000`. The model completes guest Tx doorbells and returns synthetic
+responses for the registered local Bluetooth task: configuration, start,
+stop, security, local-name, and SSP IO-capability confirmations, followed by
+an application-init indication. Reply status, Bluetooth address, version,
+and service fields are synthetic values inferred from the guest receiver.
+No packets were captured from a real SH core or Bluetooth module. Other tasks
+and functions are logged without a response; profile traffic is not modeled.
+Disable the model with `-M clarion-qy8,shcore=off` (or `QY8_SHCORE=off` with
+`tools/qy8_run.sh`).
 
 ## 5. Serial ports and SD cards
 
