@@ -1,7 +1,8 @@
 /*
- * Clarion 2DG minimal blitter model.
+ * Clarion 2DG blitter model.
  *
- * The command list is recorded for diagnostics but is not executed.
+ * Command lists (M2DG format) are executed into guest memory; property
+ * "exec" (default on) disables execution, "log" records the lists.
  */
 #ifndef HW_DISPLAY_CLARION_2DG_H
 #define HW_DISPLAY_CLARION_2DG_H
