@@ -679,7 +679,8 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
     unknown:
         qemu_log_mask(LOG_UNIMP,
                       "clarion-2dg: unimplemented command %08x at %08"
-                      HWADDR_PRIx " (list %08" HWADDR_PRIx "), list abandoned\n",
+                      HWADDR_PRIx " (list %08" HWADDR_PRIx
+                      "), list abandoned\n",
                       w, pc, list);
         c->stopped_op = op;
         break;
