@@ -791,6 +791,14 @@ bool superh_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
         if (cpu_env(cs)->flags & TB_FLAG_DELAY_SLOT_MASK) {
             return false;
         } else {
+            CPUSH4State *env = cpu_env(cs);
+
+            if (cs->exception_index == -1 &&
+                !(env->sr & (1u << SR_BL) && !env->in_sleep) &&
+                sh_intc_get_pending_vector(
+                    env->intc_handle, (env->sr >> 4) & 0xf) == -1) {
+                return false;
+            }
             superh_cpu_do_interrupt(cs);
             return true;
         }

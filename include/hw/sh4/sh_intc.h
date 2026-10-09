@@ -35,6 +35,7 @@ struct intc_prio_reg {
 
 struct intc_source {
     unsigned short vect;
+    unsigned short priority;
     intc_enum next_enum_id;
 
     int asserted; /* emulates the interrupt signal line from device to intc */

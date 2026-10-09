@@ -92,11 +92,14 @@ int sh_intc_get_pending_vector(struct intc_desc *desc, int imask)
         struct intc_source *source = &desc->sources[i];
 
         if (source->pending) {
+            if (source->priority && source->priority <= imask) {
+                continue;
+            }
             trace_sh_intc_pending(desc->pending, source->vect);
             return source->vect;
         }
     }
-    g_assert_not_reached();
+    return -1;
 }
 
 typedef enum {
