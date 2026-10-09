@@ -30,6 +30,7 @@
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "hw/core/boards.h"
+#include "hw/misc/clarion_boards.h"
 #include "hw/core/sysbus.h"
 #include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
@@ -1727,7 +1728,7 @@ struct Qy8MachineState {
     bool tma460_synthetic_profile_on; /* opt-in synthetic profile */
     bool i2c_empty_on;          /* opt-in: I2C0..I2C2 з порожньою шиною */
     char *board;                /* property value: "auto", a model, an alias */
-    const struct Qy8BoardInfo *board_info; /* resolved in qy8_init() */
+    const ClarionBoardInfo *board_info; /* resolved in qy8_init() */
     bool reverse;               /* RV input, machine property */
     bool g2d_on;
     bool shcore_on;
@@ -1803,40 +1804,25 @@ static void qy8_usb_irq(void *opaque, int n, int level)
  * characters at +0x40.  The block is not at the same place in every unit
  * family, so a short list of offsets is probed.
  */
-typedef struct Qy8BoardInfo {
-    const char *model;          /* as stored in the PROD block */
-    const char *name;           /* canonical board= value */
-    const char *alias;          /* deprecated board= value */
-    bool tma616;                /* touch controller: TMA616, not TMA460 */
-} Qy8BoardInfo;
-
-/* One row per supported unit model */
-static const Qy8BoardInfo qy8_boards[] = {
-    { "QY8652NB", "qy8652nb", "ze1", false },
-    { "QY8202NA", "qy8202na", "ze0", true },
-};
-
-static const hwaddr qy8_prod_offsets[] = { 0x40000, 0xa000 };
-
-#define QY8_PROD_MODEL_OFF  0x40
-#define QY8_PROD_MODEL_LEN  8
-
-static const Qy8BoardInfo *qy8_board_by_name(const char *name)
+static const ClarionBoardInfo *qy8_board_by_name(const char *name)
 {
-    for (int i = 0; i < ARRAY_SIZE(qy8_boards); i++) {
-        if (!g_strcmp0(name, qy8_boards[i].name) ||
-            !g_strcmp0(name, qy8_boards[i].alias)) {
-            return &qy8_boards[i];
+    for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
+        if (!g_strcmp0(name, clarion_boards[i].name) ||
+            !g_strcmp0(name, clarion_boards[i].alias)) {
+            return clarion_boards[i].target &&
+                   !strcmp(clarion_boards[i].target, "arm") ?
+                   &clarion_boards[i] : NULL;
         }
     }
     return NULL;
 }
 
-static const Qy8BoardInfo *qy8_board_by_model(const char *model)
+static const ClarionBoardInfo *qy8_board_by_model(const char *model)
 {
-    for (int i = 0; i < ARRAY_SIZE(qy8_boards); i++) {
-        if (!strcmp(model, qy8_boards[i].model)) {
-            return &qy8_boards[i];
+    for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
+        if (!strcmp(model, clarion_boards[i].model) &&
+            !strcmp(clarion_boards[i].target, "arm")) {
+            return &clarion_boards[i];
         }
     }
     return NULL;
@@ -1868,11 +1854,11 @@ static bool qy8_flash_peek(MachineState *machine, hwaddr offset,
 
 /* Find the PROD block; on success @model is a printable C string */
 static bool qy8_flash_model(MachineState *machine, hwaddr *prod_offset,
-                            char model[QY8_PROD_MODEL_LEN + 1],
+                            char model[CLARION_PROD_MODEL_LEN + 1],
                             uint8_t first_bytes[4])
 {
-    for (int i = 0; i < ARRAY_SIZE(qy8_prod_offsets); i++) {
-        hwaddr off = qy8_prod_offsets[i];
+    for (int i = 0; i < ARRAY_SIZE(clarion_prod_offsets); i++) {
+        hwaddr off = clarion_prod_offsets[i];
         uint8_t sig[4] = { 0 };
 
         if (!qy8_flash_peek(machine, off, sig, sizeof(sig))) {
@@ -1882,16 +1868,16 @@ static bool qy8_flash_model(MachineState *machine, hwaddr *prod_offset,
             memcpy(first_bytes, sig, sizeof(sig));
         }
         if (memcmp(sig, "PROD", 4) ||
-            !qy8_flash_peek(machine, off + QY8_PROD_MODEL_OFF,
-                            (uint8_t *)model, QY8_PROD_MODEL_LEN)) {
+            !qy8_flash_peek(machine, off + CLARION_PROD_MODEL_OFF,
+                            (uint8_t *)model, CLARION_PROD_MODEL_LEN)) {
             continue;
         }
-        for (int j = 0; j < QY8_PROD_MODEL_LEN; j++) {
+        for (int j = 0; j < CLARION_PROD_MODEL_LEN; j++) {
             if (!g_ascii_isgraph(model[j])) {
                 model[j] = '.';
             }
         }
-        model[QY8_PROD_MODEL_LEN] = '\0';
+        model[CLARION_PROD_MODEL_LEN] = '\0';
         *prod_offset = off;
         return true;
     }
@@ -1901,8 +1887,8 @@ static bool qy8_flash_model(MachineState *machine, hwaddr *prod_offset,
 static void qy8_resolve_board(Qy8MachineState *s, MachineState *machine)
 {
     static const char hint[] = "choose one with board=qy8652nb|qy8202na";
-    const Qy8BoardInfo *detected = NULL;
-    char model[QY8_PROD_MODEL_LEN + 1] = "";
+    const ClarionBoardInfo *detected = NULL;
+    char model[CLARION_PROD_MODEL_LEN + 1] = "";
     uint8_t first[4] = { 0 };
     bool is_auto = !strcmp(s->board, "auto");
     hwaddr prod = 0;
@@ -1927,7 +1913,7 @@ static void qy8_resolve_board(Qy8MachineState *s, MachineState *machine)
         error_report("clarion-qy8: no PROD block in the flash image "
                      "(%02x %02x %02x %02x at 0x%" HWADDR_PRIx "); %s",
                      first[0], first[1], first[2], first[3],
-                     qy8_prod_offsets[0], hint);
+                     clarion_prod_offsets[0], hint);
         exit(1);
     } else if (g_str_has_prefix(model, "QY7")) {
         error_report("clarion-qy8: unit model %s is a QY7-series unit "
@@ -1954,7 +1940,7 @@ static void qy8_resolve_board(Qy8MachineState *s, MachineState *machine)
 /* QY8202NA, the unit albertbm brought up as "ze0": TMA616 touch controller */
 static bool qy8_is_ze0(Qy8MachineState *s)
 {
-    return s->board_info && s->board_info->tma616;
+    return s->board_info && !strcmp(s->board_info->model, "QY8202NA");
 }
 
 /* Parking brake on, lights off; reverse as the property says */
