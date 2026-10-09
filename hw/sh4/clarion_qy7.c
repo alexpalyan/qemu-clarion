@@ -7,12 +7,14 @@
 #include "hw/block/flash.h"
 #include "hw/char/clarion_scif.h"
 #include "hw/misc/unimp.h"
+#include "hw/misc/clarion_qy7_regs.h"
 #include "hw/sh4/clarion_sh4_core.h"
 #include "hw/sh4/sh_intc.h"
 #include "hw/timer/tmu012.h"
 #include "hw/core/irq.h"
 #include "target/sh4/cpu-qom.h"
 #include "target/sh4/cpu.h"
+#include "qom/object.h"
 #include "system/address-spaces.h"
 #include "system/reset.h"
 #include "system/system.h"
@@ -21,6 +23,11 @@
 #define QY7_RAM_BASE 0x08000000
 #define QY7_RAM_SIZE (96 * MiB)
 #define QY7_SCIF_BASE 0xffe46000
+
+typedef struct QY7MachineState {
+    MachineState parent_obj;
+    uint8_t dipsw;
+} QY7MachineState;
 
 static struct intc_desc qy7_intc;
 static struct intc_source qy7_tmu0_source;
@@ -50,6 +57,7 @@ static void qy7_reset(void *opaque)
 
 static void qy7_init(MachineState *machine)
 {
+    QY7MachineState *qmachine = (QY7MachineState *)machine;
     MemoryRegion *sysmem = get_system_memory();
     MemoryRegion *ram = g_new0(MemoryRegion, 1);
     SuperHCPU *cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
@@ -58,6 +66,10 @@ static void qy7_init(MachineState *machine)
 
     if (!cpu) {
         error_report("Unable to create SH7785 CPU");
+        exit(1);
+    }
+    if (qmachine->dipsw > 7) {
+        error_report("dipsw must be in the range 0..7");
         exit(1);
     }
     qy7_intc.nr_sources = 1;
@@ -74,6 +86,7 @@ static void qy7_init(MachineState *machine)
     qemu_register_reset(qy7_reset, reset);
     memory_region_init_ram(ram, NULL, "qy7.ram", QY7_RAM_SIZE, &error_fatal);
     memory_region_add_subregion(sysmem, QY7_RAM_BASE, ram);
+    clarion_qy7_regs_init(sysmem, qmachine->dipsw);
 
     dinfo = drive_get(IF_PFLASH, 0, 0);
     pflash_cfi02_register(0, "qy7.flash", QY7_FLASH_SIZE,
@@ -108,4 +121,26 @@ static void qy7_machine_init(MachineClass *mc)
     mc->ignore_memory_transaction_failures = true;
 }
 
-DEFINE_MACHINE("clarion-qy7", qy7_machine_init)
+static void qy7_machine_class_init(ObjectClass *oc, const void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+
+    qy7_machine_init(mc);
+    object_class_property_add_uint8_ptr(
+        oc, "dipsw", offsetof(QY7MachineState, dipsw),
+        OBJ_PROP_FLAG_READWRITE);
+}
+
+static const TypeInfo qy7_machine_typeinfo = {
+    .name = MACHINE_TYPE_NAME("clarion-qy7"),
+    .parent = TYPE_MACHINE,
+    .instance_size = sizeof(QY7MachineState),
+    .class_init = qy7_machine_class_init,
+};
+
+static void qy7_machine_register_types(void)
+{
+    type_register_static(&qy7_machine_typeinfo);
+}
+
+type_init(qy7_machine_register_types)
