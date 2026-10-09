@@ -18,3 +18,12 @@ config SH7750
     select SH_INTC
     select SH_SCI
     select SH_TIMER
+
+config CLARION_QY7
+    bool
+    default y
+    depends on SH4
+    select PFLASH_CFI02
+    select CLARION_SCIF
+    select UNIMP
+    select SH_TIMER
