@@ -46,12 +46,12 @@ starting QEMU.
 ```sh
 build-release/qemu-clarion -n flash-rw.bin
 build-release/qemu-clarion flash-rw.bin -nographic
-build-release/qemu-clarion ze0-nor.bin -machine dipsw=1 -nographic
+build-release/qemu-clarion qy8202na-nor.bin -machine dipsw=1 -nographic
 build-release/qemu-clarion qy7-nor.bin -machine dipsw=7 -snapshot -nographic
 ```
 
-The first two examples use a QY8 ZE1 image (`QY8652NB`), the third uses a QY8
-ZE0 image (`QY8202NA`), and the fourth uses a QY7 image (`QY7221NL`). QY7
+The first two examples use a `QY8652NB` image, the third uses a `QY8202NA`
+image, and the fourth uses a `QY7221NL` image. QY7
 flash images should be launched with `-snapshot` so guest writes are discarded.
 QY8 machine properties can be supplied with `-machine name=value`; they merge
 with the machine selected by the launcher.
@@ -121,10 +121,9 @@ the same command line is merged with the first.
 
 ### Board selection
 
-Boards are named after the unit model, because the car generation does
-not tell the unit apart: the 2014-2017 Leaf (ZE0) was fitted with units
-of more than one family. With `board=auto` the machine reads the model
-from the flash image, from the block that starts with `PROD` (8 ASCII
+Boards are named after the full unit model; the vehicle generation does not
+identify the head unit unambiguously. With `board=auto` the machine reads the
+model from the flash image, from the block that starts with `PROD` (8 ASCII
 characters at `+0x40` of the block), and prints one line at start-up:
 
 ```
@@ -135,8 +134,6 @@ clarion-qy8: unit model QY8202NA (PROD block at 0x40000), board qy8202na (auto)
 |---|---|---|---|
 | `QY8652NB` | `qy8652nb` | TMA460 at `0x24` | found in the 2018+ Leaf (ZE1) |
 | `QY8202NA` | `qy8202na` | TMA616 at `0x67` | found in the 2014-2017 Leaf (ZE0) |
-
-`ze1` and `ze0` are deprecated aliases of `qy8652nb` and `qy8202na`.
 
 With `auto`, an image without a `PROD` block or with an unknown model is
 an error; name the board explicitly to run it anyway. An explicit board

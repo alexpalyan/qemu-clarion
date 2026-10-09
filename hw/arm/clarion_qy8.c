@@ -1,5 +1,5 @@
 /*
- * Clarion QY8XXX head unit (Nissan Leaf ZE1) — емуляція плати.
+ * Clarion QY8XXX head unit (Nissan Leaf) — емуляція плати.
  *
  * SoC: Renesas R8A7778 (R-Car M1A), одноядерний Cortex-A9.
  * ОС:  Windows CE, XIP просто з флеш на CS0 (reset-вектор @PA 0).
@@ -249,8 +249,9 @@ static int qy8_scif_chr_index(int scif)
 #define BCTL_ST_BOOT        0x0400
 
 /*
- * Vehicle inputs in the same word, from GPIO.dll's register reader (ZE0
- * @0xEF6F31E0, ZE1 @0xEF6C3204): IOCTL_GPIO_ACCESS_* -> ldrh [base] >> bit.
+ * Vehicle inputs in the same word, from GPIO.dll's register reader (QY8202NA
+ * @0xEF6F31E0, QY8652NB @0xEF6C3204):
+ * IOCTL_GPIO_ACCESS_* -> ldrh [base] >> bit.
  * GPIO.dll polls them and signals EVT_GPIO_* on a change. All active low.
  * ST_PWR is IGN (bit 7) and ST_BOOT is NAVI_ON (bit 10) in the same table.
  */
@@ -1071,9 +1072,11 @@ static const MemoryRegionOps qy8_usbphy_ops = {
 
 /*
  * Bases are the ones MQUSBH prints and the OAL's base->IRQ table uses
- * (nk.exe ZE0 @0x8801275c, ZE1 @0x88013028): EHCI -> IRQ 165, OHCI -> 164.
+ * (nk.exe QY8202NA @0x8801275c, QY8652NB @0x88013028): EHCI -> IRQ 165,
+ * OHCI -> 164.
  * Both share GIC ID 76 (SPI 44); the OAL demux reads INTC2 word 0xFE782058,
- * bit 1 for EHCI and bit 0 for OHCI (ZE0 @0x88011734, ZE1 @0x88011e14).
+ * bit 1 for EHCI and bit 0 for OHCI (QY8202NA @0x88011734,
+ * QY8652NB @0x88011e14).
  * Vendor registers inside the EHCI window (EIIBC1/2 at +0x94/+0x9c, written
  * by the OAL) fall through to qy8.periph.
  */
@@ -1677,6 +1680,16 @@ static void qy8_int2_line_init(MemoryRegion *sysmem, Qy8Int2Line *l,
 #define TYPE_QY8_MACHINE MACHINE_TYPE_NAME("clarion-qy8")
 OBJECT_DECLARE_SIMPLE_TYPE(Qy8MachineState, QY8_MACHINE)
 
+typedef struct Qy8BoardProperties {
+    const char *name;
+    bool tma616;
+} Qy8BoardProperties;
+
+static const Qy8BoardProperties qy8_board_properties[] = {
+    { "qy8652nb", false },
+    { "qy8202na", true },
+};
+
 struct Qy8MachineState {
     MachineState parent;
 
@@ -1727,8 +1740,9 @@ struct Qy8MachineState {
     bool tma460_on;             /* opt-in bounded TMA460 model */
     bool tma460_synthetic_profile_on; /* opt-in synthetic profile */
     bool i2c_empty_on;          /* opt-in: I2C0..I2C2 з порожньою шиною */
-    char *board;                /* property value: "auto", a model, an alias */
+    char *board;                /* property value: "auto" or canonical name */
     const ClarionBoardInfo *board_info; /* resolved in qy8_init() */
+    const Qy8BoardProperties *board_properties;
     bool reverse;               /* RV input, machine property */
     bool g2d_on;
     bool shcore_on;
@@ -1807,11 +1821,20 @@ static void qy8_usb_irq(void *opaque, int n, int level)
 static const ClarionBoardInfo *qy8_board_by_name(const char *name)
 {
     for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
-        if (!g_strcmp0(name, clarion_boards[i].name) ||
-            !g_strcmp0(name, clarion_boards[i].alias)) {
+        if (!g_strcmp0(name, clarion_boards[i].name)) {
             return clarion_boards[i].target &&
                    !strcmp(clarion_boards[i].target, "arm") ?
                    &clarion_boards[i] : NULL;
+        }
+    }
+    return NULL;
+}
+
+static const Qy8BoardProperties *qy8_properties_by_name(const char *name)
+{
+    for (int i = 0; i < ARRAY_SIZE(qy8_board_properties); i++) {
+        if (!strcmp(name, qy8_board_properties[i].name)) {
+            return &qy8_board_properties[i];
         }
     }
     return NULL;
@@ -1935,12 +1958,12 @@ static void qy8_resolve_board(Qy8MachineState *s, MachineState *machine)
         info_report("clarion-qy8: no PROD block in the flash image, "
                     "board %s (set explicitly)", s->board_info->name);
     }
+    s->board_properties = qy8_properties_by_name(s->board_info->name);
 }
 
-/* QY8202NA, the unit albertbm brought up as "ze0": TMA616 touch controller */
-static bool qy8_is_ze0(Qy8MachineState *s)
+static bool qy8_has_tma616(Qy8MachineState *s)
 {
-    return s->board_info && !strcmp(s->board_info->model, "QY8202NA");
+    return s->board_properties && s->board_properties->tma616;
 }
 
 /* Parking brake on, lights off; reverse as the property says */
@@ -2275,9 +2298,9 @@ static void qy8_init(MachineState *machine)
         if (s->i2c4_recorder_on) {
             i2c_slave_create_simple(bus, TYPE_CLARION_I2C4_RECORDER, 0x24);
         }
-        if (s->tma460_on && qy8_is_ze0(s)) {
+        if (s->tma460_on && qy8_has_tma616(s)) {
             /*
-             * The ZE0 board has a TMA616 in the same place: application
+             * The QY8202NA unit has a TMA616 in the same place: application
              * on 0x67, bootloader on 0x69, same reset and interrupt pins.
              */
             s->tma460 = DEVICE(i2c_slave_create_simple(bus,
@@ -2490,7 +2513,7 @@ static void qy8_init(MachineState *machine)
     qdev_set_id(s->du, g_strdup("qy8-du"), &error_fatal);
     qdev_prop_set_uint32(s->du, "dotclk", s->du_dotclk);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->du), &error_fatal);
-    if (s->tma460 && qy8_is_ze0(s)) {
+    if (s->tma460 && qy8_has_tma616(s)) {
         clarion_tma616_bind_pointer_input(s->tma460, "qy8-du", &error_fatal);
     } else if (s->tma460 && s->tma460_synthetic_profile_on) {
         clarion_tma460_bind_pointer_input(s->tma460, "qy8-du", &error_fatal);
@@ -2708,7 +2731,7 @@ static void qy8_board_set(Object *obj, const char *value, Error **errp)
     Qy8MachineState *s = QY8_MACHINE(obj);
 
     if (g_strcmp0(value, "auto") && !qy8_board_by_name(value)) {
-        error_setg(errp, "board must be auto, qy8652nb or qy8202na");
+        error_setg(errp, "board must be auto, qy8652nb, or qy8202na");
         return;
     }
     g_free(s->board);
@@ -2992,8 +3015,7 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_add_str(obj, "board", qy8_board_get, qy8_board_set);
     object_property_set_description(obj, "board",
         "board peripherals by unit model: auto (default, read from the "
-        "flash image), qy8652nb, qy8202na; ze1 and ze0 are deprecated "
-        "aliases of the last two");
+        "flash image), qy8652nb, or qy8202na");
 
     s->dipsw = QY8_DIPSW_NORM_RES;
     object_property_add_uint8_ptr(obj, "dipsw", &s->dipsw,
@@ -3060,7 +3082,7 @@ static void qy8_machine_instance_init(Object *obj)
                              qy8_tma460_set);
     object_property_set_description(obj, "tma460",
         "Bounded TMA460 bootloader model at I2C4 address 0x24 (on by default; requires i2c4=on); "
-        "TMA616 at 0x67 with board=ze0");
+        "TMA616 at 0x67 with board=qy8202na");
 
     s->tma460_synthetic_profile_on = true;
     object_property_add_bool(obj, "tma460-profile",

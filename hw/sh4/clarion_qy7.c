@@ -64,6 +64,33 @@ static void qy7_reset(void *opaque)
     reset->cpu->env.pc = 0xa0000000;
 }
 
+static const ClarionBoardInfo *qy7_board_by_model(const char *model)
+{
+    for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
+        if (!strcmp(model, clarion_boards[i].model)) {
+            return &clarion_boards[i];
+        }
+    }
+    return NULL;
+}
+
+static void qy7_report_invalid_model(const char *model)
+{
+    GString *supported = g_string_new(NULL);
+
+    for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
+        if (!strcmp(clarion_boards[i].machine, "clarion-qy7")) {
+            g_string_append_printf(supported, "%s%s",
+                                   supported->len ? ", " : "",
+                                   clarion_boards[i].model);
+        }
+    }
+    error_report("clarion-qy7: flash model %s is not supported; "
+                 "supported: %s; use qemu-clarion",
+                 model, supported->str);
+    g_string_free(supported, true);
+}
+
 static void qy7_init(MachineState *machine)
 {
     QY7MachineState *qmachine = (QY7MachineState *)machine;
@@ -73,6 +100,7 @@ static void qy7_init(MachineState *machine)
     QY7ResetData *reset;
     DriveInfo *dinfo;
     char model[CLARION_PROD_MODEL_LEN + 1] = "";
+    const ClarionBoardInfo *board;
     bool found = false;
 
     dinfo = drive_get(IF_PFLASH, 0, 0);
@@ -97,10 +125,9 @@ static void qy7_init(MachineState *machine)
             break;
         }
     }
-    if (!found || strcmp(model, "QY7221NL")) {
-        error_report("clarion-qy7: flash model %s is not supported; "
-                     "supported: QY7221NL; use qemu-clarion",
-                     found ? model : "<no PROD>");
+    board = found ? qy7_board_by_model(model) : NULL;
+    if (!board || strcmp(board->machine, "clarion-qy7")) {
+        qy7_report_invalid_model(found ? model : "<no PROD>");
         exit(1);
     }
 

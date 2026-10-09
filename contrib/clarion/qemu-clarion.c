@@ -54,6 +54,19 @@ static void usage(const char *program)
     fprintf(stderr, "usage: %s [-n] FLASH [QEMU arguments...]\n", program);
 }
 
+static char *drive_argument(const char *path)
+{
+    GString *drive = g_string_new("if=pflash,format=raw,file=");
+
+    for (const char *p = path; *p; p++) {
+        g_string_append_c(drive, *p);
+        if (*p == ',') {
+            g_string_append_c(drive, ',');
+        }
+    }
+    return g_string_free(drive, FALSE);
+}
+
 int main(int argc, char **argv)
 {
     gboolean dry_run = FALSE;
@@ -101,7 +114,7 @@ int main(int argc, char **argv)
     args[arg_count++] = (char *)"-M";
     args[arg_count++] = (char *)board->machine;
     args[arg_count++] = (char *)"-drive";
-    args[arg_count++] = g_strdup_printf("if=pflash,format=raw,file=%s", flash);
+    args[arg_count++] = drive_argument(flash);
     for (int i = first_arg; i < argc; i++) {
         args[arg_count++] = argv[i];
     }
