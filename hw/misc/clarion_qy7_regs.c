@@ -24,6 +24,9 @@ static bool qy7_known(hwaddr addr)
     case 0x00000010:
     case 0x00000012:
     case 0x00100000:
+    case 0x02000000:
+    case 0x02000002:
+    case 0x02000004:
     case 0x00300000:
     case 0x00300006:
     case 0x00300008:
