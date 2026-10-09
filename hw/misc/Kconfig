@@ -273,3 +273,6 @@ config CLARION_DISPMICOM
 
 config CLARION_UBLOX
     bool
+
+config CLARION_USBPHY
+    bool

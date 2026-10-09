@@ -45,6 +45,7 @@
 #include "monitor/qdev.h"
 #include "hw/display/clarion_sgx.h"
 #include "hw/misc/clarion_micom.h"
+#include "hw/misc/clarion_usbphy.h"
 #include "hw/misc/clarion_shcore.h"
 #include "hw/misc/clarion_dispmicom.h"
 #include "hw/misc/clarion_ublox.h"
@@ -996,78 +997,6 @@ static const MemoryRegionOps qy8_void_ops = {
     .valid.max_access_size = 8,
 };
 
-/* --- USB-PHY (R-Car Gen1) @0xFFE70800 --------------------------------- */
-
-
-/*
- * Перший блок, на якому спіткнулося саме ЯДРО, а не завантажувач.
- *
- * Регістрова мапа взята з Linux (`drivers/usb/phy/phy-rcar-usb.c`,
- * сумісність "renesas,usb-phy-r8a7778"), а не вгадана; там же вузол
- * usb-phy@ffe70800 має другим вікном 0xffe76000.
- *
- *   +0x00 USBPCTRL0
- *   +0x04 USBPCTRL1 — біт0 PHY_ENB, біт1 PLL_ENB, біт2 PHY_RST
- *   +0x08 USBST     — тільки читання: біт31 ST_ACT, біт30 ST_PLL
- *
- * Прошивка робить рівно те, що й драйвер Linux: пише в USBPCTRL1 спершу
- * 1 (PHY_ENB), потім 3 (PHY_ENB|PLL_ENB) і чекає, поки в USBST стануть
- * обидва біти — «PLL захопився». Поки регістр читався нулем, ядро
- * крутилося в цьому опитуванні вічно (5,3 млн читань за 20 с у `-d unimp`).
- */
-#define QY8_USBPHY_BASE     0xFFE70800
-#define QY8_USBPHY_SIZE     0x100
-
-#define USBPCTRL1           0x04
-#define USBST               0x08
-
-#define USBPCTRL1_PHY_ENB   (1u << 0)
-#define USBPCTRL1_PLL_ENB   (1u << 1)
-#define USBST_ACT           (1u << 31)
-#define USBST_PLL           (1u << 30)
-
-typedef struct Qy8UsbPhy {
-    MemoryRegion mr;
-    uint32_t reg[QY8_USBPHY_SIZE / 4];
-} Qy8UsbPhy;
-
-static uint64_t qy8_usbphy_read(void *opaque, hwaddr addr, unsigned size)
-{
-    Qy8UsbPhy *u = opaque;
-    uint32_t ctrl1 = u->reg[USBPCTRL1 / 4];
-
-    if (addr == USBST) {
-        /* PLL «захоплюється» миттєво, щойно ввімкнено PHY і PLL */
-        if ((ctrl1 & (USBPCTRL1_PHY_ENB | USBPCTRL1_PLL_ENB)) ==
-            (USBPCTRL1_PHY_ENB | USBPCTRL1_PLL_ENB)) {
-            return USBST_ACT | USBST_PLL;
-        }
-        return 0;
-    }
-    return u->reg[addr / 4];
-}
-
-static void qy8_usbphy_write(void *opaque, hwaddr addr, uint64_t val,
-                             unsigned size)
-{
-    Qy8UsbPhy *u = opaque;
-
-    if (addr == USBST) {          /* статус — тільки читання */
-        return;
-    }
-    u->reg[addr / 4] = val;
-}
-
-static const MemoryRegionOps qy8_usbphy_ops = {
-    .read = qy8_usbphy_read,
-    .write = qy8_usbphy_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-    .impl.min_access_size = 4,
-    .impl.max_access_size = 4,
-    .valid.min_access_size = 1,
-    .valid.max_access_size = 4,
-};
-
 /* --- USB host: EHCI @0xFFE70000, OHCI @0xFFE70400 --------------------- */
 
 /*
@@ -1083,6 +1012,7 @@ static const MemoryRegionOps qy8_usbphy_ops = {
 #define QY8_EHCI_BASE       0xFFE70000
 #define QY8_OHCI_BASE       0xFFE70400
 #define QY8_USB_SPI         44
+#define QY8_USBPHY_BASE     0xFFE70800
 #define QY8_INT2_USB_OHCI   (1u << 0)
 #define QY8_INT2_USB_EHCI   (1u << 1)
 
@@ -1715,7 +1645,6 @@ struct Qy8MachineState {
     Qy8Tmu tmu;
     Qy8Gpio gpio[QY8_GPIO_BANKS];
     Qy8Bctl bctl;
-    Qy8UsbPhy usbphy;
     Qy8Dbsc3 dbsc3;
     Qy8Int2Line int2_du;
     Qy8Int2Line int2_sdhi[QY8_NUM_SDHI];
@@ -2477,11 +2406,8 @@ static void qy8_init(MachineState *machine)
     memory_region_add_subregion_overlap(sysmem, QY8_BCTL_BASE,
                                         &s->bctl.mr, 1);
 
-    /* USB-PHY: перекриває широке вікно qy8.periph (див. нижче) */
-    memory_region_init_io(&s->usbphy.mr, NULL, &qy8_usbphy_ops, &s->usbphy,
-                          "qy8.usbphy", QY8_USBPHY_SIZE);
-    memory_region_add_subregion_overlap(sysmem, QY8_USBPHY_BASE,
-                                        &s->usbphy.mr, 2);
+    /* USB-PHY: overlays the broad qy8.periph window below. */
+    clarion_usbphy_init(sysmem, QY8_USBPHY_BASE, 2, "qy8.usbphy");
 
     /*
      * The EHCI window is 4 KiB and would cover OHCI and the PHY, so those
