@@ -4,10 +4,12 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "hw/core/boards.h"
+#include "system/block-backend.h"
 #include "hw/block/flash.h"
 #include "hw/char/clarion_scif.h"
 #include "hw/misc/unimp.h"
 #include "hw/misc/clarion_qy7_regs.h"
+#include "hw/misc/clarion_boards.h"
 #include "hw/sh4/clarion_sh4_core.h"
 #include "hw/sh4/sh_intc.h"
 #include "hw/timer/tmu012.h"
@@ -70,6 +72,37 @@ static void qy7_init(MachineState *machine)
     SuperHCPU *cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
     QY7ResetData *reset;
     DriveInfo *dinfo;
+    char model[CLARION_PROD_MODEL_LEN + 1] = "";
+    bool found = false;
+
+    dinfo = drive_get(IF_PFLASH, 0, 0);
+    if (dinfo) {
+        BlockBackend *blk = blk_by_legacy_dinfo(dinfo);
+        for (int i = 0; i < ARRAY_SIZE(clarion_prod_offsets); i++) {
+            uint8_t sig[4];
+            uint8_t raw[CLARION_PROD_MODEL_LEN];
+            hwaddr off = clarion_prod_offsets[i];
+
+            if (blk_pread(blk, off, sizeof(sig), sig, 0) < 0 ||
+                memcmp(sig, "PROD", sizeof(sig)) ||
+                blk_pread(blk, off + CLARION_PROD_MODEL_OFF, sizeof(raw),
+                         raw, 0) < 0) {
+                continue;
+            }
+            for (int j = 0; j < sizeof(raw); j++) {
+                model[j] = g_ascii_isgraph(raw[j]) ? raw[j] : '.';
+            }
+            model[sizeof(raw)] = '\0';
+            found = true;
+            break;
+        }
+    }
+    if (!found || strcmp(model, "QY7221NL")) {
+        error_report("clarion-qy7: flash model %s is not supported; "
+                     "supported: QY7221NL; use qemu-clarion",
+                     found ? model : "<no PROD>");
+        exit(1);
+    }
 
     if (!cpu) {
         error_report("Unable to create SH7785 CPU");
@@ -95,7 +128,6 @@ static void qy7_init(MachineState *machine)
     memory_region_add_subregion(sysmem, QY7_RAM_BASE, ram);
     clarion_qy7_regs_init(sysmem, qmachine->dipsw);
 
-    dinfo = drive_get(IF_PFLASH, 0, 0);
     pflash_cfi02_register(0, "qy7.flash", QY7_FLASH_SIZE,
                           dinfo ? blk_by_legacy_dinfo(dinfo) : NULL, 64 * KiB,
                           1, 2, 0x0001, 0x227e, 0x2220, 0x2200, 0x555, 0x2aa,
