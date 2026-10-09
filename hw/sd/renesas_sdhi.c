@@ -188,6 +188,10 @@ struct RenesasSDHIState {
      */
     DeviceState *dmac;
     uint64_t dma_buf_addr;      /* фізична адреса власного SD_BUF0 */
+    char *read_log_path;
+    uint32_t read_sector;
+    uint32_t read_index;
+    uint32_t read_total;
 
     uint16_t cmd, portsel, arg0, arg1, stop, seccnt;
     uint16_t rsp[8];
@@ -291,15 +295,45 @@ static bool sdhi_cmd_has_response(unsigned idx)
 
 static void sdhi_fill_block(RenesasSDHIState *s)
 {
+    bool ready = sdbus_data_ready(&s->sdbus);
+
     memset(s->buf, 0, s->blen);
-    if (sdbus_data_ready(&s->sdbus)) {
+    if (ready) {
         sdbus_read_data(&s->sdbus, s->buf, s->blen);
     } else {
         /* картка даних не дає — це обрив передачі, а не тиша */
         s->info2 |= INFO2_DATATIMEOUT;
+    }
+
+    if (s->read_log_path && *s->read_log_path &&
+        ((s->cmd & CMD_IDX) == 17 || (s->cmd & CMD_IDX) == 18)) {
+        FILE *file = fopen(s->read_log_path, "a");
+        bool all_zero = ready;
+
+        for (uint32_t i = 0; i < s->blen; i++) {
+            all_zero &= s->buf[i] == 0;
+        }
+        if (file) {
+            fprintf(file,
+                    "{\"unit\":%u,\"cmd\":%u,\"block\":%u,"
+                    "\"block_index\":%u,\"blocks\":%u,"
+                    "\"bytes\":%u,\"ready\":%s,\"all_zero\":%s,"
+                    "\"result\":\"%s\"}\n",
+                    s->unit, s->cmd & CMD_IDX, s->read_sector,
+                    s->read_index, s->read_total, s->blen,
+                    ready ? "true" : "false",
+                    all_zero ? "true" : "false",
+                    ready ? "ok" : "not-ready");
+            fclose(file);
+        }
+    }
+    if (!ready) {
         sdhi_abort_data(s);
         return;
     }
+
+    s->read_sector++;
+    s->read_index++;
     s->pos = 0;
     s->info2 |= INFO2_RXRDY;
 }
@@ -386,6 +420,14 @@ static void sdhi_send_command(RenesasSDHIState *s)
 
     req.cmd = idx;
     req.arg = ((uint32_t)s->arg1 << 16) | s->arg0;
+    if ((s->cmd & (CMD_DATA | CMD_READ)) == (CMD_DATA | CMD_READ)) {
+        s->read_sector = req.arg;
+        s->read_index = 0;
+        s->read_total = (s->stop & STOP_SEC) ? s->seccnt : 1;
+        if (!s->read_total) {
+            s->read_total = 1;
+        }
+    }
     trace_renesas_sdhi_command(s->unit, idx, req.arg, s->cmd);
 
     want_rsp = (s->cmd & CMD_RSPTP) != CMD_RSPTP_NONE &&
@@ -730,7 +772,7 @@ static void sdhi_init(Object *obj)
 
 static const VMStateDescription vmstate_renesas_sdhi = {
     .name = "renesas-sdhi",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT16(cmd, RenesasSDHIState),
@@ -762,6 +804,9 @@ static const VMStateDescription vmstate_renesas_sdhi = {
         VMSTATE_UINT32(blocks, RenesasSDHIState),
         VMSTATE_BOOL(reading, RenesasSDHIState),
         VMSTATE_BOOL(writing, RenesasSDHIState),
+        VMSTATE_UINT32_V(read_sector, RenesasSDHIState, 2),
+        VMSTATE_UINT32_V(read_index, RenesasSDHIState, 2),
+        VMSTATE_UINT32_V(read_total, RenesasSDHIState, 2),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -794,6 +839,7 @@ static const Property sdhi_properties[] = {
     DEFINE_PROP_LINK("dmac", RenesasSDHIState, dmac, TYPE_DEVICE,
                      DeviceState *),
     DEFINE_PROP_UINT64("dma-buf-addr", RenesasSDHIState, dma_buf_addr, 0),
+    DEFINE_PROP_STRING("read-log", RenesasSDHIState, read_log_path),
 };
 
 static void sdhi_class_init(ObjectClass *klass, const void *data)
