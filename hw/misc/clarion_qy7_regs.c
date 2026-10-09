@@ -4,7 +4,7 @@
 #include "qemu/log.h"
 
 #define QY7_REGS_BASE 0x19000000
-#define QY7_REGS_SIZE 0x08000100
+#define QY7_REGS_SIZE 0x00800100
 #define QY7_STATUS0 0x19400000
 #define QY7_DIPSW 0x19400002
 #define QY7_STATUS1 0x19800000
@@ -44,7 +44,7 @@ static bool qy7_known(hwaddr addr)
     case 0x0040000c:
     case 0x0040000e:
     case 0x00400010:
-    case 0x08000000:
+    case 0x00800000:
         return true;
     default:
         return false;
