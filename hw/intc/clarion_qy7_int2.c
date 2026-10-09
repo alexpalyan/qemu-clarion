@@ -15,6 +15,7 @@
 #include "hw/sh4/sh_intc.h"
 #include "exec/cpu-interrupt.h"
 #include "system/reset.h"
+#include "trace.h"
 
 #define INT2_SIZE 0x100
 
@@ -77,10 +78,8 @@ static void int2_tmu_set(void *opaque, int n, int level)
     int2_update(s);
 }
 
-static uint64_t int2_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t int2_reg_read(ClarionQy7Int2 *s, hwaddr addr)
 {
-    ClarionQy7Int2 *s = opaque;
-
     switch (addr) {
     case INT2_PRIO0:
         return s->prio[0];
@@ -98,10 +97,19 @@ static uint64_t int2_read(void *opaque, hwaddr addr, unsigned size)
     }
 }
 
+static uint64_t int2_read(void *opaque, hwaddr addr, unsigned size)
+{
+    uint64_t val = int2_reg_read(opaque, addr);
+
+    trace_clarion_qy7_int2_read(addr, val);
+    return val;
+}
+
 static void int2_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
     ClarionQy7Int2 *s = opaque;
 
+    trace_clarion_qy7_int2_write(addr, val);
     switch (addr) {
     case INT2_PRIO0:
         s->prio[0] = val;

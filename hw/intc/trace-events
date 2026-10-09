@@ -361,3 +361,7 @@ loongarch_extioi_writew(uint64_t addr, uint64_t val) "addr: 0x%"PRIx64 "val: 0x%
 # riscv_aplic.c
 riscv_aplic_read(uint64_t offset, unsigned size, uint64_t value) "offset: 0x%" PRIx64 ", size: %u, value: 0x%" PRIx64
 riscv_aplic_write(uint64_t offset, unsigned size, uint64_t value) "offset: 0x%" PRIx64 ", size: %u, value: 0x%" PRIx64
+
+# clarion_qy7_int2.c
+clarion_qy7_int2_read(uint64_t offset, uint64_t value) "offset: 0x%02" PRIx64 ", value: 0x%08" PRIx64
+clarion_qy7_int2_write(uint64_t offset, uint64_t value) "offset: 0x%02" PRIx64 ", value: 0x%08" PRIx64
