@@ -144,8 +144,8 @@ static void qy7_init(MachineState *machine)
     qy7_intc.nr_sources = 1;
     qy7_intc.sources = &qy7_tmu0_source;
     qy7_tmu0_source.parent = &qy7_intc;
-    qy7_tmu0_source.vect = 0x560;
-    qy7_tmu0_source.priority = 1;
+    qy7_tmu0_source.vect = 0x580;
+    qy7_tmu0_source.priority = 8;
     cpu->env.intc_handle = &qy7_intc;
     tmu012_init(sysmem, 0xffd80000,
                 TMU012_FEAT_TOCR | TMU012_FEAT_3CHAN | TMU012_FEAT_EXTCLK,
