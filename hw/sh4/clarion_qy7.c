@@ -12,7 +12,7 @@
 #include "hw/misc/clarion_usbphy.h"
 #include "hw/misc/clarion_boards.h"
 #include "hw/sh4/clarion_sh4_core.h"
-#include "hw/sh4/sh_intc.h"
+#include "hw/intc/clarion_qy7_int2.h"
 #include "hw/timer/tmu012.h"
 #include "hw/core/irq.h"
 #include "target/sh4/cpu-qom.h"
@@ -27,6 +27,7 @@
 #define QY7_RAM_SIZE (96 * MiB)
 #define QY7_SCIF_BASE 0xffe46000
 #define QY7_USBPHY_BASE 0xffe70800
+#define QY7_INT2_BASE 0xff804000
 
 typedef struct QY7MachineState {
     MachineState parent_obj;
@@ -38,20 +39,6 @@ static void qy7_machine_instance_init(Object *obj)
     QY7MachineState *s = (QY7MachineState *)obj;
 
     s->dipsw = 7;
-}
-
-static struct intc_desc qy7_intc;
-static struct intc_source qy7_tmu0_source;
-
-static void qy7_tmu0_irq(void *opaque, int n, int level)
-{
-    qy7_tmu0_source.pending = level;
-    qy7_intc.pending = level;
-    if (level) {
-        cpu_interrupt(first_cpu, CPU_INTERRUPT_HARD);
-    } else {
-        cpu_reset_interrupt(first_cpu, CPU_INTERRUPT_HARD);
-    }
 }
 
 typedef struct QY7ResetData {
@@ -100,6 +87,7 @@ static void qy7_init(MachineState *machine)
     MemoryRegion *ram = g_new0(MemoryRegion, 1);
     SuperHCPU *cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
     QY7ResetData *reset;
+    ClarionQy7Int2 *int2;
     DriveInfo *dinfo;
     char model[CLARION_PROD_MODEL_LEN + 1] = "";
     const ClarionBoardInfo *board;
@@ -141,16 +129,13 @@ static void qy7_init(MachineState *machine)
         error_report("dipsw must be in the range 0..7");
         exit(1);
     }
-    qy7_intc.nr_sources = 1;
-    qy7_intc.sources = &qy7_tmu0_source;
-    qy7_tmu0_source.parent = &qy7_intc;
-    qy7_tmu0_source.vect = 0x580;
-    qy7_tmu0_source.priority = 8;
-    cpu->env.intc_handle = &qy7_intc;
+    int2 = clarion_qy7_int2_init(sysmem, QY7_INT2_BASE, CPU(cpu),
+                                 &cpu->env.intc_handle);
     tmu012_init(sysmem, 0xffd80000,
                 TMU012_FEAT_TOCR | TMU012_FEAT_3CHAN | TMU012_FEAT_EXTCLK,
-                33333333, qemu_allocate_irq(qy7_tmu0_irq, NULL, 0), NULL, NULL,
-                NULL);
+                33333333, clarion_qy7_int2_timer_irq(int2, 0),
+                clarion_qy7_int2_timer_irq(int2, 1),
+                clarion_qy7_int2_timer_irq(int2, 2), NULL);
     reset = g_new0(QY7ResetData, 1);
     reset->cpu = cpu;
     qemu_register_reset(qy7_reset, reset);
@@ -170,7 +155,9 @@ static void qy7_init(MachineState *machine)
 
     create_unimplemented_device("qy7.dbsc", 0xfe800000, 0x10000);
     create_unimplemented_device("qy7.lbsc", 0xff800200, 0x200);
-    create_unimplemented_device("qy7.lbsc-window", 0xff801000, 0x4000);
+    /* 0xff804000..0xff8040ff is the INT2 controller (qy7.int2) */
+    create_unimplemented_device("qy7.lbsc-window", 0xff801000, 0x3000);
+    create_unimplemented_device("qy7.lbsc-window2", 0xff804100, 0xf00);
     create_unimplemented_device("qy7.hpb", 0xffc08000, 0x1000);
     create_unimplemented_device("qy7.gpio", 0xffc40000, 0x4000);
     create_unimplemented_device("qy7.cpg", 0xffc80000, 0x1000);
