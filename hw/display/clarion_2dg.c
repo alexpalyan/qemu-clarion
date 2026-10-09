@@ -886,10 +886,23 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
             }
             break;
         case M2DG_LINE_B1:
-            /* Length 8 words inferred from the list ending on its TRAP. */
-            words = 8;
-            c->skipped[op]++;
+        {
+            unsigned n = a4;
+            int vx[CLARION_2DG_MAX_PATH], vy[CLARION_2DG_MAX_PATH];
+
+            /* a1 holds two colour halves; a4 is n; a5 is width. */
+            words = 6 + n;
+            if (n && n <= CLARION_2DG_MAX_PATH &&
+                clarion_2dg_read_xy(pc + 24, n, vx, vy)) {
+                /* The low colour half matches the paired B0 command. */
+                clarion_2dg_polyline(c, vx, vy, n, a1 & 0xffff,
+                                     MAX(1, (int)a5));
+                c->done[op]++;
+            } else {
+                c->skipped[op]++;
+            }
             break;
+        }
         case M2DG_LINE_NC:
             words = 3; /* no colour word; colour source not established */
             c->skipped[op]++;
@@ -899,7 +912,8 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
         }
         if (!stop) {
             c->done[op] += (op != M2DG_POLY4C && op != M2DG_POLY4T &&
-                            op != M2DG_LINE && op != M2DG_LINE_NC &&
+                            op != M2DG_LINE && op != M2DG_LINE_B1 &&
+                            op != M2DG_LINE_NC &&
                             op != M2DG_LCOFS && op != M2DG_MOVE);
         }
         pc += words * 4;
