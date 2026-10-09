@@ -20,21 +20,24 @@
 #define INT2_SIZE 0x100
 
 /* Offsets proven by guest accesses (NK1 and the IP12/EH12 bootloaders). */
-#define INT2_PRIO0      0x00 /* group priorities, one byte per group */
+#define INT2_PRIO0      0x00 /* group priorities, stored, no effect yet */
 #define INT2_PRIO1      0x04
 #define INT2_MASK_SET   0x40 /* write 1: mask the group, read: mask */
 #define INT2_MASK_CLR   0x44 /* write 1: unmask the group */
-#define INT2_TMU_SRC    0x58 /* bit n: TMU channel n request line */
 
 /*
- * INFERENCE: the timer group is mask bit 8 and the top byte of PRIO0.  NK1's
- * ISR for vector 0x580 masks 0x100 on entry (0x8803F1BC), the unmask
- * switch of NK1 (0x8803E554) writes 0x100 to MASK_CLR for ids 12..14, and
- * NK1 writes PRIO0 = 0x08020202 with 8 equal to the priority it assigns to
- * vector 0x580 in the table at 0x8A64280C.
+ * INFERENCE: the TMU group is mask bit 1.  The kernel writes 2 to MASK_CLR
+ * right after it installs the tick ISR (0x8803D698), and IP12/EH12, which
+ * only need the timer, unmask exactly 2.
  */
-#define INT2_TIMER_GROUP_BIT  8
-#define INT2_TIMER_PRIO_SHIFT 24
+#define INT2_TMU_GROUP_BIT  1
+
+/*
+ * The priority of the TMU sources is 1: the value comes from the guest's
+ * priority table (0x8A64280C, entry 16 for vector 0x400).  Which register
+ * holds it is not established, so the PRIO0/PRIO1 contents do not affect it.
+ */
+#define INT2_TMU_PRIORITY   1
 
 #define INT2_TMU_CHANNELS 3
 #define INT2_UNK_SLOTS    (INT2_SIZE / 4)
@@ -53,12 +56,11 @@ struct ClarionQy7Int2 {
 
 static void int2_update(ClarionQy7Int2 *s)
 {
-    uint32_t prio = (s->prio[0] >> INT2_TIMER_PRIO_SHIFT) & 0xff;
-    bool open = !(s->mask & BIT(INT2_TIMER_GROUP_BIT)) && prio > 0;
+    bool open = !(s->mask & BIT(INT2_TMU_GROUP_BIT));
     int pending = 0;
 
     for (int i = 0; i < INT2_TMU_CHANNELS; i++) {
-        s->src[i].priority = prio;
+        s->src[i].priority = INT2_TMU_PRIORITY;
         s->src[i].pending = open && (s->tmu_lines & BIT(i));
         pending += s->src[i].pending;
     }
@@ -87,8 +89,6 @@ static uint64_t int2_reg_read(ClarionQy7Int2 *s, hwaddr addr)
         return s->prio[1];
     case INT2_MASK_SET:
         return s->mask;
-    case INT2_TMU_SRC:
-        return s->tmu_lines;
     default:
         qemu_log_mask(LOG_UNIMP,
                       "clarion-qy7-int2: unimp read +0x%02" HWADDR_PRIx
@@ -159,9 +159,9 @@ ClarionQy7Int2 *clarion_qy7_int2_init(MemoryRegion *sysmem, hwaddr base,
                                       CPUState *cpu, void **intc_handle)
 {
     ClarionQy7Int2 *s = g_new0(ClarionQy7Int2, 1);
-    /* INTEVT of TUNI0..2, same as in the SH7785 manual and the NK1 ISR */
+    /* Vectors the guest installs for TMU0..2 (tick ISR at vector 0x400) */
     static const unsigned short vect[INT2_TMU_CHANNELS] = {
-        0x580, 0x5a0, 0x5c0,
+        0x400, 0x420, 0x440,
     };
 
     s->cpu = cpu;
