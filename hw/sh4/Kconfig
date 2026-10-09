@@ -23,6 +23,7 @@ config CLARION_QY7
     bool
     default y
     depends on SH4
+    select CLARION_USBPHY
     select PFLASH_CFI02
     select CLARION_SCIF
     select UNIMP

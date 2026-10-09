@@ -9,6 +9,7 @@
 #include "hw/char/clarion_scif.h"
 #include "hw/misc/unimp.h"
 #include "hw/misc/clarion_qy7_regs.h"
+#include "hw/misc/clarion_usbphy.h"
 #include "hw/misc/clarion_boards.h"
 #include "hw/sh4/clarion_sh4_core.h"
 #include "hw/sh4/sh_intc.h"
@@ -25,6 +26,7 @@
 #define QY7_RAM_BASE 0x08000000
 #define QY7_RAM_SIZE (96 * MiB)
 #define QY7_SCIF_BASE 0xffe46000
+#define QY7_USBPHY_BASE 0xffe70800
 
 typedef struct QY7MachineState {
     MachineState parent_obj;
@@ -163,6 +165,7 @@ static void qy7_init(MachineState *machine)
     clarion_sh4_core_init(cpu, sysmem);
     clarion_scif_init(g_new0(ClarionScif, 1), sysmem, QY7_SCIF_BASE, "qy7.scif",
                       0, 0, NULL, NULL, false);
+    clarion_usbphy_init(sysmem, QY7_USBPHY_BASE, 2, "qy7.usbphy");
 
     create_unimplemented_device("qy7.dbsc", 0xfe800000, 0x10000);
     create_unimplemented_device("qy7.lbsc", 0xff800200, 0x200);
