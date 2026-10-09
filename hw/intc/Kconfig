@@ -68,6 +68,9 @@ config PPC_UIC
 config SH_INTC
     bool
 
+config CLARION_QY7_INT2
+    bool
+
 config RX_ICU
     bool
 
