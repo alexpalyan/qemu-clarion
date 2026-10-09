@@ -54,6 +54,7 @@
 #include "hw/i2c/clarion_rcar_i2c.h"
 #include "hw/sd/renesas_sdhi.h"
 #include "hw/misc/unimp.h"
+#include "hw/char/clarion_scif.h"
 #include "hw/usb/hcd-ehci.h"
 #include "hw/usb/hcd-ohci.h"
 #include "hw/block/flash.h"
@@ -281,284 +282,6 @@ static int qy8_scif_chr_index(int scif)
 /* Режими DIPSW — таблиця переходів eboot @VA 0x97c07e28 */
 #define QY8_DIPSW_NORM_RES  5           /* "NORM(RES)>>" — як із TEST_B1 */
 
-/* --- SCIF (Renesas serial, 16-бітні регістри) ------------------------- */
-
-#define SCIF_SCSMR      0x00
-#define SCIF_SCBRR      0x04
-#define SCIF_SCSCR      0x08
-#define SCIF_SCFTDR     0x0C
-#define SCIF_SCFSR      0x10
-#define SCIF_SCFRDR     0x14
-#define SCIF_SCFCR      0x18
-#define SCIF_SCFDR      0x1C
-#define SCIF_SCSPTR     0x20
-#define SCIF_SCLSR      0x24
-
-/* SCFSR (мапа sh-sci.h: DR, RDF, PER, FER, BRK, TDFE, TEND, ER) */
-#define SCFSR_DR        0x0001
-#define SCFSR_RDF       0x0002
-#define SCFSR_TDFE      0x0020
-#define SCFSR_TEND      0x0040
-
-/* SCFCR: RTRG[7:6] — рівень запуску приймача, RFRST — скидання FIFO прийому */
-#define SCFCR_RFRST     0x0002
-#define QY8_SCIF_FIFO   16
-
-/*
- * DR («receive data ready») SCIF зводить, коли у FIFO є байти, їх менше за
- * рівень запуску, і лінія мовчить ~15 бітових інтервалів. Швидкість гість
- * задає не через SCBRR (пише туди 0), тож беремо сталу паузу — важлива не
- * її точність, а сам факт «посилка скінчилася».
- */
-#define QY8_SCIF_IDLE_NS    200000
-
-typedef struct Qy8Scif {
-    MemoryRegion mr;
-    CharFrontend chr;
-    qemu_irq irq;
-    DeviceState *dmac;          /* кому віддавати прийняті байти */
-    DeviceState *micom;         /* супутній МК на тому ж дроті, якщо є */
-    DeviceState *dispmicom;     /* МК панелі на тому ж дроті, якщо є */
-    DeviceState *ublox;         /* приймач GNSS на тому ж дроті, якщо є */
-    hwaddr base;                /* фізична база — щоб назвати SCFRDR для DMA */
-    uint16_t scsmr, scscr, scfcr;
-    uint8_t fifo[QY8_SCIF_FIFO];
-    unsigned fifo_len;
-    bool dr;                    /* прийом завершився паузою */
-    QEMUTimer *idle;
-    int index;
-    bool txi;                   /* зводити TXI при TIE (лише SCIF3) */
-} Qy8Scif;
-
-/* SCSCR — дозволи переривань (мапа sh-sci.h) */
-#define SCSCR_RIE       0x0040
-#define SCSCR_TIE       0x0080
-
-/* RTRG[7:6] -> скільки байтів у FIFO запускають запит DMA (мапа SCIF) */
-static unsigned qy8_scif_rtrg(Qy8Scif *s)
-{
-    static const unsigned lvl[4] = { 1, 4, 8, 14 };
-    return lvl[(s->scfcr >> 6) & 3];
-}
-
-static bool qy8_scif_rdf(Qy8Scif *s)
-{
-    return s->fifo_len >= qy8_scif_rtrg(s);
-}
-
-static void qy8_scif_update_irq(Qy8Scif *s)
-{
-    /*
-     * Переривання приймача просять RDF і DR, і обидва — лише при RIE.
-     * ⚠ Перевірено дослідом: якщо підняти лінію по DR без RIE (є спокуса
-     * тлумачити біт 2 SCSCR як TOIE з sh-sci.h), драйвер SCIF4 входить в
-     * обробник, читає SCFSR/SCSCR/SCLSR, нічого не бере з SCFRDR і не гасить
-     * причину — виходить нескінченний шторм (219 тис. входів за 16 с). Тобто
-     * такого джерела на цьому SCIF драйвер не знає.
-     *
-     * Передавач у нас завжди порожній (TDFE стоїть постійно), тож TXI — це
-     * просто TIE. serial_scif.dll передає по перериваннях: кладе байт,
-     * вмикає TIE і чекає TXI; коли черга спорожніла, сам знімає TIE. Без TXI
-     * кожен запис у SCI3: висить до наступного вхідного байта, а модулі, що
-     * пишуть у debug shell, блокуються й бут не доходить до AUI (перевірено
-     * дослідом, nissan-can-explore docs/32). Вмикаємо лише на SCIF3: на
-     * решті портів поведінку драйвера з TIE не перевірено.
-     */
-    qemu_set_irq(s->irq,
-                 ((qy8_scif_rdf(s) || s->dr) && (s->scscr & SCSCR_RIE)) ||
-                 (s->txi && (s->scscr & SCSCR_TIE)));
-}
-
-/*
- * Віддати байти DMA. Запит DMA приймача — це той самий RXI, і SCIF зводить
- * його або по RDF (набрався рівень запуску RTRG), або по DR (посилка
- * скінчилася, у FIFO лишилося менше за рівень). Що RDF і DR — одне й те саме
- * джерело RXI, видно з `sh-sci.c`: в `sci_rx_interrupt()` драйвер гасить
- * причину як `ssr & ~(SCIF_DR | SCxSR_RDxF(port))`, тобто обидва біти разом.
- * Що цей самий RXI йде в DMAC, у джерелах Linux не записано (каналів SCIF у
- * `hpb_dmae_slaves[]` немає) — це рішення моделі; без нього коротка
- * відповідь micom назавжди лишалася б у FIFO, чого на живій платі не буває.
- */
-static void qy8_scif_rx_pump(Qy8Scif *s)
-{
-    unsigned taken = 0;
-
-    if (s->dmac && (s->fifo_len >= qy8_scif_rtrg(s) || s->dr)) {
-        while (taken < s->fifo_len &&
-               clarion_hpbdma_feed(s->dmac, s->base + SCIF_SCFRDR,
-                                   s->fifo[taken])) {
-            taken++;
-        }
-    }
-    if (taken) {
-        memmove(s->fifo, s->fifo + taken, s->fifo_len - taken);
-        s->fifo_len -= taken;
-        if (!s->fifo_len) {
-            s->dr = false;
-        }
-    }
-    qy8_scif_update_irq(s);
-}
-
-static void qy8_scif_idle_expire(void *opaque)
-{
-    Qy8Scif *s = opaque;
-
-    if (s->fifo_len) {
-        s->dr = true;
-        qy8_scif_rx_pump(s);        /* DR теж просить DMA — див. rx_pump */
-    }
-    /*
-     * Посилка скінчилася: те, що канал DMA уже переніс, — усе, що буде.
-     * Кажемо йому завершити set, інакше короткий кадр мовчки лежав би в
-     * буфері гостя до кінця 128-байтного DTCR (див. clarion_hpbdma_eod).
-     */
-    if (s->dmac) {
-        clarion_hpbdma_eod(s->dmac, s->base + SCIF_SCFRDR);
-    }
-    if (s->fifo_len) {
-        /*
-         * Канал DMA зараз не озброєний — запит лишається висіти, як у
-         * залізі, і байти чекають у FIFO. Перевіряємо ще раз згодом:
-         * інакше про них ніхто б не згадав до наступного прийнятого байта.
-         */
-        timer_mod(s->idle, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                           QY8_SCIF_IDLE_NS);
-    }
-}
-
-static uint64_t qy8_scif_read(void *opaque, hwaddr addr, unsigned size)
-{
-    Qy8Scif *s = opaque;
-
-    switch (addr) {
-    case SCIF_SCSMR:
-        return s->scsmr;
-    case SCIF_SCSCR:
-        return s->scscr;
-    case SCIF_SCFSR:
-        /* передавач завжди готовий; приймач — за станом FIFO */
-        return SCFSR_TDFE | SCFSR_TEND |
-               (qy8_scif_rdf(s) ? SCFSR_RDF : 0) | (s->dr ? SCFSR_DR : 0);
-    case SCIF_SCFRDR: {
-        uint8_t v = s->fifo_len ? s->fifo[0] : 0;
-
-        if (s->fifo_len) {
-            memmove(s->fifo, s->fifo + 1, --s->fifo_len);
-        }
-        if (!s->fifo_len) {
-            s->dr = false;
-        }
-        qy8_scif_update_irq(s);
-        return v;
-    }
-    case SCIF_SCFCR:
-        return s->scfcr;
-    case SCIF_SCFDR:
-        /* старший байт — заповненість TX FIFO (0), молодший — RX */
-        return s->fifo_len;
-    case SCIF_SCSPTR:
-        return 0;
-    case SCIF_SCLSR:
-        return 0;
-    default:
-        return 0;
-    }
-}
-
-static void qy8_scif_write(void *opaque, hwaddr addr, uint64_t val,
-                           unsigned size)
-{
-    Qy8Scif *s = opaque;
-    uint8_t ch;
-
-    switch (addr) {
-    case SCIF_SCSMR:
-        s->scsmr = val;
-        break;
-    case SCIF_SCSCR:
-        s->scscr = val;
-        qy8_scif_update_irq(s);
-        break;
-    case SCIF_SCFTDR:
-        ch = val & 0xff;
-        /*
-         * Якщо до цього SCIF під'єднано супутній МК, байт іде йому — це той
-         * самий дріт, а не додатковий канал. Відповіді micom лягають у FIFO
-         * приймача через qy8_micom_sink() нижче, тобто тим самим шляхом, що
-         * й байти від -serial: DMA і прапорець DR працюють як є.
-         */
-        if (s->micom) {
-            clarion_micom_rx_byte(s->micom, ch);
-            break;
-        }
-        if (s->dispmicom) {
-            clarion_dispmicom_rx_byte(s->dispmicom, ch);
-            break;
-        }
-        if (s->ublox) {
-            clarion_ublox_rx_byte(s->ublox, ch);
-            break;
-        }
-        /* синхронний вивід: без нього ранні рядки буту губляться */
-        qemu_chr_fe_write_all(&s->chr, &ch, 1);
-        break;
-    case SCIF_SCFCR:
-        s->scfcr = val;
-        if (val & SCFCR_RFRST) {            /* скидання FIFO прийому */
-            s->fifo_len = 0;
-            s->dr = false;
-        }
-        qy8_scif_update_irq(s);
-        break;
-    case SCIF_SCFSR:
-        /* прапорці скидаються записом нуля у відповідний біт */
-        if (!(val & SCFSR_DR)) {
-            s->dr = false;
-        }
-        qy8_scif_update_irq(s);
-        break;
-    default:
-        break;
-    }
-}
-
-static const MemoryRegionOps qy8_scif_ops = {
-    .read = qy8_scif_read,
-    .write = qy8_scif_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-    .impl.min_access_size = 1,
-    .impl.max_access_size = 4,
-    .valid.min_access_size = 1,
-    .valid.max_access_size = 4,
-};
-
-static int qy8_scif_can_receive(void *opaque)
-{
-    Qy8Scif *s = opaque;
-    return QY8_SCIF_FIFO - s->fifo_len;
-}
-
-static void qy8_scif_receive(void *opaque, const uint8_t *buf, int size)
-{
-    Qy8Scif *s = opaque;
-
-    /*
-     * Байти лягають у FIFO приймача, як у залізі. DMA забирає їх лише коли
-     * назбирався рівень запуску RTRG (гість ставить 14) — саме тому коротка
-     * відповідь від micom лишається у FIFO, і про неї повідомляє DR.
-     */
-    int i;
-
-    for (i = 0; i < size && s->fifo_len < QY8_SCIF_FIFO; i++) {
-        s->fifo[s->fifo_len++] = buf[i];
-    }
-    s->dr = false;
-    qy8_scif_rx_pump(s);
-    timer_mod(s->idle, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                       QY8_SCIF_IDLE_NS);
-}
-
 /* --- HSCIF0 (високошвидкісний SCIF) @0xFFE48000 ----------------------- */
 
 /*
@@ -664,6 +387,13 @@ static void qy8_scif_receive(void *opaque, const uint8_t *buf, int size)
 
 /* SCFCR: скидання FIFO передавача/приймача (та сама мапа, що в SCIF) */
 #define SCFCR_TFRST     0x0004
+#define HSCIF_SCFCR_RFRST 0x0002
+#define HSCIF_SCSCR_RIE   0x0040
+#define HSCIF_SCFSR_DR   0x0001
+#define HSCIF_SCFSR_RDF  0x0002
+#define HSCIF_SCFSR_TDFE 0x0020
+#define HSCIF_SCFSR_TEND 0x0040
+#define QY8_SCIF_IDLE_NS 200000
 
 #define QY8_HSCIF_FIFO  128             /* sh-sci.c: fifosize = 128 */
 
@@ -728,7 +458,7 @@ static bool qy8_hscif_tdfe(Qy8Hscif *h)
 static void qy8_hscif_update_irq(Qy8Hscif *h)
 {
     /* Тільки приймач і тільки при RIE — див. застереження в моделі SCIF. */
-    qemu_set_irq(h->irq, (qy8_hscif_rdf(h) || h->dr) && (h->scscr & SCSCR_RIE));
+    qemu_set_irq(h->irq, (qy8_hscif_rdf(h) || h->dr) && (h->scscr & HSCIF_SCSCR_RIE));
 }
 
 static void qy8_hscif_tx_expire(void *opaque)
@@ -766,10 +496,10 @@ static uint64_t qy8_hscif_read(void *opaque, hwaddr addr, unsigned size)
     case HSCIF_SCSCR:
         return h->scscr;
     case HSCIF_SCFSR:
-        return (qy8_hscif_tdfe(h) ? SCFSR_TDFE : 0) |
-               (qy8_hscif_tend(h) ? SCFSR_TEND : 0) |
-               (qy8_hscif_rdf(h) ? SCFSR_RDF : 0) |
-               (h->dr ? SCFSR_DR : 0);
+        return (qy8_hscif_tdfe(h) ? HSCIF_SCFSR_TDFE : 0) |
+               (qy8_hscif_tend(h) ? HSCIF_SCFSR_TEND : 0) |
+               (qy8_hscif_rdf(h) ? HSCIF_SCFSR_RDF : 0) |
+               (h->dr ? HSCIF_SCFSR_DR : 0);
     case HSCIF_SCFRDR: {
         uint8_t v = h->rx_len ? h->rx[0] : 0;
 
@@ -842,7 +572,7 @@ static void qy8_hscif_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case HSCIF_SCFCR:
         h->scfcr = val;
-        if (val & SCFCR_RFRST) {
+        if (val & HSCIF_SCFCR_RFRST) {
             h->rx_len = 0;
             h->dr = false;
         }
@@ -854,7 +584,7 @@ static void qy8_hscif_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case HSCIF_SCFSR:
         /* прапорці гасяться записом нуля у відповідний біт */
-        if (!(val & SCFSR_DR)) {
+        if (!(val & HSCIF_SCFSR_DR)) {
             h->dr = false;
         }
         qy8_hscif_update_irq(h);
@@ -942,19 +672,19 @@ static void qy8_hscif_receive(void *opaque, const uint8_t *buf, int size)
  * лишався у стані 2, ACM-ID 61 ніколи не виставлявся (docs/24 у
  * nissan-can-explore).
  */
-static int qy8_micom_burst(Qy8Scif *s, const uint8_t *buf, int len)
+static int qy8_micom_burst(ClarionScif *s, const uint8_t *buf, int len)
 {
     int done = 0;
 
     while (done < len) {
-        int room = qy8_scif_can_receive(s);
+        int room = clarion_scif_can_receive(s);
         int n;
 
         if (room <= 0) {
             break;                  /* DMA не озброєний — решту доллє МК */
         }
         n = MIN(room, len - done);
-        qy8_scif_receive(s, buf + done, n);
+        clarion_scif_receive(s, buf + done, n);
         done += n;
     }
     return done;
@@ -1954,7 +1684,7 @@ struct Qy8MachineState {
     DeviceState *du;
     DeviceState *dmac;
     DeviceState *lbdma;      /* DMA читання NOR @0xFF801000 */
-    Qy8Scif scif[QY8_NUM_SCIF];
+    ClarionScif scif[QY8_NUM_SCIF];
     Qy8Hscif hscif0;
     DeviceState *micom;
     DeviceState *dispmicom;
@@ -2636,17 +2366,16 @@ static void qy8_init(MachineState *machine)
 
     /* --- SCIF --- */
     for (i = 0; i < QY8_NUM_SCIF; i++) {
-        Qy8Scif *sc = &s->scif[i];
+        ClarionScif *sc = &s->scif[i];
         char *name = g_strdup_printf("qy8.scif%d", i);
 
-        sc->index = i;
-        /* QY8_SCIF3_TXI=0 повертає стару поведінку (A/B) */
-        sc->txi = i == QY8_SCIF_DEBUG &&
-                  g_strcmp0(getenv("QY8_SCIF3_TXI"), "0") != 0;
-        sc->base = QY8_SCIF_BASE + i * QY8_SCIF_STRIDE;
-        sc->idle = timer_new_ns(QEMU_CLOCK_VIRTUAL, qy8_scif_idle_expire, sc);
-        sc->dmac = s->dmac;
-        sc->irq = qdev_get_gpio_in(s->gic, QY8_SCIF_SPI0 + i);
+        clarion_scif_init(sc, sysmem,
+                          QY8_SCIF_BASE + i * QY8_SCIF_STRIDE, name, i,
+                          qy8_scif_chr_index(i),
+                          qdev_get_gpio_in(s->gic, QY8_SCIF_SPI0 + i),
+                          s->dmac,
+                          i == QY8_SCIF_DEBUG &&
+                          g_strcmp0(getenv("QY8_SCIF3_TXI"), "0") != 0);
         if (i == QY8_SCIF_MICOM && s->micom) {
             sc->micom = s->micom;
             clarion_micom_set_sink(s->micom, qy8_micom_sink, sc);
@@ -2658,17 +2387,6 @@ static void qy8_init(MachineState *machine)
         if (i == 2 && s->ublox) {
             sc->ublox = s->ublox;
             clarion_ublox_set_sink(s->ublox, qy8_ublox_sink, sc);
-        }
-        memory_region_init_io(&sc->mr, NULL, &qy8_scif_ops, sc, name, 0x100);
-        memory_region_add_subregion(sysmem,
-                                    QY8_SCIF_BASE + i * QY8_SCIF_STRIDE,
-                                    &sc->mr);
-        if (serial_hd(qy8_scif_chr_index(i))) {
-            qemu_chr_fe_init(&sc->chr, serial_hd(qy8_scif_chr_index(i)),
-                             &error_abort);
-            qemu_chr_fe_set_handlers(&sc->chr, qy8_scif_can_receive,
-                                     qy8_scif_receive, NULL, NULL,
-                                     sc, NULL, true);
         }
         g_free(name);
     }

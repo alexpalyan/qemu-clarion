@@ -734,6 +734,7 @@ config AXIADO_EVK
 
 config CLARION_QY8
     bool
+    select CLARION_SCIF
     default y
     depends on TCG && ARM
     select ARM_GIC
