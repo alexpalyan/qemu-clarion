@@ -29,6 +29,13 @@ typedef struct QY7MachineState {
     uint8_t dipsw;
 } QY7MachineState;
 
+static void qy7_machine_instance_init(Object *obj)
+{
+    QY7MachineState *s = (QY7MachineState *)obj;
+
+    s->dipsw = 7;
+}
+
 static struct intc_desc qy7_intc;
 static struct intc_source qy7_tmu0_source;
 
@@ -135,6 +142,7 @@ static const TypeInfo qy7_machine_typeinfo = {
     .name = MACHINE_TYPE_NAME("clarion-qy7"),
     .parent = TYPE_MACHINE,
     .instance_size = sizeof(QY7MachineState),
+    .instance_init = qy7_machine_instance_init,
     .class_init = qy7_machine_class_init,
 };
 

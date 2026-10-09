@@ -12,7 +12,6 @@
 typedef struct QY7BoardRegs {
     MemoryRegion iomem;
     uint8_t dipsw;
-    GHashTable *writes;
 } QY7BoardRegs;
 
 static bool qy7_known(hwaddr addr)
@@ -24,9 +23,9 @@ static bool qy7_known(hwaddr addr)
     case 0x00000010:
     case 0x00000012:
     case 0x00100000:
-    case 0x02000000:
-    case 0x02000002:
-    case 0x02000004:
+    case 0x00200000:
+    case 0x00200002:
+    case 0x00200004:
     case 0x00300000:
     case 0x00300006:
     case 0x00300008:
@@ -80,12 +79,9 @@ static uint64_t qy7_regs_read(void *opaque, hwaddr addr, unsigned size)
 static void qy7_regs_write(void *opaque, hwaddr addr, uint64_t value,
                            unsigned size)
 {
-    QY7BoardRegs *s = opaque;
+    (void)opaque;
 
-    if (size == 2 && qy7_known(addr)) {
-        g_hash_table_insert(s->writes, GUINT_TO_POINTER(addr + 1),
-                            GUINT_TO_POINTER((uint16_t)value + 1));
-    } else {
+    if (size != 2 || !qy7_known(addr)) {
         qemu_log_mask(LOG_UNIMP,
                       "clarion-qy7-regs: unimp write addr=0x%08" HWADDR_PRIx
                       " width=%u value=0x%" PRIx64 "\n",
@@ -113,7 +109,6 @@ void clarion_qy7_regs_init(MemoryRegion *sysmem, uint8_t dipsw)
     QY7BoardRegs *s = g_new0(QY7BoardRegs, 1);
 
     s->dipsw = dipsw;
-    s->writes = g_hash_table_new(g_direct_hash, g_direct_equal);
     memory_region_init_io(&s->iomem, NULL, &qy7_regs_ops, s, "clarion-qy7-regs",
                           QY7_REGS_SIZE);
     memory_region_add_subregion(sysmem, QY7_REGS_BASE, &s->iomem);
