@@ -95,6 +95,9 @@ static void qy7_init(MachineState *machine)
     create_unimplemented_device("qy7.sdhi0", 0xffe4c000, 0x1000);
     create_unimplemented_device("qy7.sdhi1", 0xffe4d000, 0x1000);
     create_unimplemented_device("qy7.pfc", 0xfffc0000, 0x10000);
+    create_unimplemented_device("qy7.intc", 0xffd00000, 0x1000);
+    create_unimplemented_device("qy7.intc-usermask", 0xffd30000, 0x1000);
+    create_unimplemented_device("qy7.intc2", 0xffd40000, 0x1000);
 }
 
 static void qy7_machine_init(MachineClass *mc)
