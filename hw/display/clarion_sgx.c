@@ -1,5 +1,5 @@
 /*
- * PowerVR SGX плати Clarion QY8XXX (Nissan Leaf ZE1, WinCE 7.0) —
+ * PowerVR SGX плати Clarion QY8XXX (WinCE 7.0) —
  * поточний QY8 baseline: PDS/USE execution і заявлений null-render B2.
  *
  * Поточний baseline: підтримані PDS/USE програми виконуються, а behavioral

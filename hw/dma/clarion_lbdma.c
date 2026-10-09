@@ -1,6 +1,6 @@
 /*
  * LBSC DMAC — DMA-двигун читання паралельної NOR плати Clarion QY8XXX
- * (Nissan Leaf ZE1, WinCE 7.0).
+ * (WinCE 7.0).
  *
  * Навіщо. `Flash.dll` не читає NOR послідовністю команд CFI. IOCTL
  * `0x01112020` (`CFlashMain::FlashReadToPhysMem`) обчислює фізичний зсув у

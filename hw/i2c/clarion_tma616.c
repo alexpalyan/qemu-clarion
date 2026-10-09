@@ -1,5 +1,5 @@
 /*
- * Cypress TMA616 touch controller of the Clarion QY8202NA (ZE0) board,
+ * Cypress TMA616 touch controller of the Clarion QY8202NA board,
  * modelled from what TouchPaneldrv.dll does on I2C4.
  *
  * The application answers on 0x67 and the bootloader on 0x69, one at a
@@ -385,7 +385,7 @@ static void clarion_tma616_pointer_event(DeviceState *dev, QemuConsole *src,
                                          INPUT_EVENT_ABS_MAX,
                                          0, TMA616_WIDTH - 1);
         } else if (evt->abs.axis == INPUT_AXIS_Y) {
-            /* kepdrv.dll mirrors Y here too, as on the ZE1 */
+            /* kepdrv.dll mirrors Y here too, as on the QY8652NB */
             s->y = TMA616_HEIGHT - 1 -
                    qemu_input_scale_axis(evt->abs.value, INPUT_EVENT_ABS_MIN,
                                          INPUT_EVENT_ABS_MAX,

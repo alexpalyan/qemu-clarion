@@ -1,6 +1,6 @@
 /*
  * Renesas HPB-DMAC (High Performance Bus DMA controller, R8A7778) —
- * модель для плати Clarion QY8XXX (Nissan Leaf ZE1).
+ * модель для плати Clarion QY8XXX.
  *
  * Блок ототожнено не за схожістю адрес, а за тим, що збіглася ВСЯ
  * регістрова мапа: гість пише сімку регістрів із кроком 0x40, і кожен
