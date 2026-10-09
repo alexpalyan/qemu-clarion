@@ -17,14 +17,14 @@ but is not covered here.
 
 ## 2. Building
 
-Two build directories are used. Run the optimized one by default; the
-debug build makes the guest noticeably slower.
+The release build contains both supported Clarion targets. Run it by
+default; the optional debug build makes the guest noticeably slower.
 
 ```sh
 # optimized build - use this one to run
 mkdir -p build-release && cd build-release
-../configure --target-list=arm-softmmu --disable-werror --enable-plugins --disable-docs
-ninja qemu-system-arm
+../configure --target-list=arm-softmmu,sh4-softmmu --disable-werror --enable-plugins --disable-docs
+ninja qemu-system-arm qemu-system-sh4 qemu-clarion
 cd ..
 
 # debug build - only when you need QEMU assertions and symbols
@@ -33,10 +33,30 @@ mkdir -p build && cd build
 ninja qemu-system-arm
 ```
 
-After a code change, `ninja qemu-system-arm` in the relevant directory is
-enough.
+After a code change, rebuild the affected emulator and `qemu-clarion` in the
+relevant directory.
 
-## 3. Supplying the flash image and running
+## 3. Automatic launcher
+
+`qemu-clarion` reads the unit model from a `PROD` block in the supplied flash
+image and selects both the emulator target and machine. It searches for the
+selected `qemu-system-*` binary beside itself. `-n` prints the command without
+starting QEMU.
+
+```sh
+build-release/qemu-clarion -n flash-rw.bin
+build-release/qemu-clarion flash-rw.bin -nographic
+build-release/qemu-clarion ze0-nor.bin -machine dipsw=1 -nographic
+build-release/qemu-clarion qy7-nor.bin -machine dipsw=7 -snapshot -nographic
+```
+
+The first two examples use a QY8 ZE1 image (`QY8652NB`), the third uses a QY8
+ZE0 image (`QY8202NA`), and the fourth uses a QY7 image (`QY7221NL`). QY7
+flash images should be launched with `-snapshot` so guest writes are discarded.
+QY8 machine properties can be supplied with `-machine name=value`; they merge
+with the machine selected by the launcher.
+
+## 4. Supplying the flash image and running
 
 The machine has no kernel loader. It takes one raw image of the board's
 NOR flash (chip select 0, exactly 64 MiB, no OOB data), maps it at
@@ -72,7 +92,7 @@ build-release/qemu-system-arm -M clarion-qy8,du-dotclk=33333333 \
 `show-cursor=on` keeps the host cursor visible: the window hides it when
 an absolute pointer device is present.
 
-## 4. Machine properties
+## 5. Machine properties
 
 Set with `-M clarion-qy8,name=value`; a second `-machine name=value` on
 the same command line is merged with the first.
@@ -183,7 +203,7 @@ and functions are logged without a response; profile traffic is not modeled.
 Disable the model with `-M clarion-qy8,shcore=off` (or `QY8_SHCORE=off` with
 `tools/qy8_run.sh`).
 
-## 5. Serial ports and SD cards
+## 6. Serial ports and SD cards
 
 **`-serial` order.** The first one is SCIF3 (the console), then SCIF0,
 SCIF1, SCIF2, SCIF4, SCIF5, HSCIF0. With `micom=on` and `dispmicom=on`,
@@ -195,7 +215,7 @@ SCIF4 and SCIF1 are taken by the built-in models.
 -drive if=sd,index=0,format=raw,file=sd.img    # front slot; index=1 is the second one
 ```
 
-## 6. Pointer input
+## 7. Pointer input
 
 With `tma460-profile=on`, pointer events are reported only after the
 controller exits bootloader and enters working mode. Button transitions are
@@ -225,7 +245,7 @@ without it QEMU answers "Input handler not found":
 
 followed by the same event with `"down": false`.
 
-## 7. Diagnostics
+## 8. Diagnostics
 
 **Environment variables** (the main ones):
 
@@ -246,7 +266,7 @@ followed by the same event with `"down": false`.
 * `-monitor tcp:127.0.0.1:PORT,server,nowait` gives a monitor, including
   `screendump file.ppm`.
 
-## 8. MIRROR: GPU-rendered content in the window
+## 9. MIRROR: GPU-rendered content in the window
 
 The GPU model (`hw/display/clarion_sgx.c`) accepts commands but does not
 rasterize. MIRROR works around that: a TCG plugin intercepts the guest's
@@ -320,7 +340,7 @@ render as complete without drawing anything; the pixels come from the
 plugin only. Current limitation: only the first few frames are presented;
 the guest is not redrawn after that.
 
-## 9. Limitations
+## 10. Limitations
 
 * The GPU model does not rasterize; GPU-rendered content appears in the
   window only through MIRROR (section 8).
