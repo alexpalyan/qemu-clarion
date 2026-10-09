@@ -25,6 +25,11 @@ typedef struct ClarionScif {
     QEMUTimer *idle;
     int index;
     bool txi;
+    bool (*dma_feed)(DeviceState *, hwaddr, uint8_t);
+    void (*dma_eod)(DeviceState *, hwaddr);
+    void (*micom_tx)(DeviceState *, uint8_t);
+    void (*dispmicom_tx)(DeviceState *, uint8_t);
+    void (*ublox_tx)(DeviceState *, uint8_t);
 } ClarionScif;
 
 void clarion_scif_init(ClarionScif *s, MemoryRegion *sysmem, hwaddr base,

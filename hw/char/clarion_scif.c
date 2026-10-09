@@ -7,10 +7,6 @@
 #include "qapi/error.h"
 #include "hw/core/irq.h"
 #include "hw/char/clarion_scif.h"
-#include "hw/dma/clarion_hpbdma.h"
-#include "hw/misc/clarion_micom.h"
-#include "hw/misc/clarion_dispmicom.h"
-#include "hw/misc/clarion_ublox.h"
 #include "system/system.h"
 
 #define SCIF_SCSMR 0x00
@@ -61,8 +57,7 @@ static void clarion_scif_rx_pump(ClarionScif *s)
 
     if (s->dmac && (s->fifo_len >= clarion_scif_rtrg(s) || s->dr)) {
         while (taken < s->fifo_len &&
-               clarion_hpbdma_feed(s->dmac, s->base + SCIF_SCFRDR,
-                                   s->fifo[taken])) {
+               s->dma_feed(s->dmac, s->base + SCIF_SCFRDR, s->fifo[taken])) {
             taken++;
         }
     }
@@ -86,7 +81,9 @@ static void clarion_scif_idle_expire(void *opaque)
     }
 
     if (s->dmac) {
-        clarion_hpbdma_eod(s->dmac, s->base + SCIF_SCFRDR);
+        if (s->dma_eod) {
+            s->dma_eod(s->dmac, s->base + SCIF_SCFRDR);
+        }
     }
     if (s->fifo_len) {
 
@@ -152,15 +149,15 @@ static void clarion_scif_write(void *opaque, hwaddr addr, uint64_t val,
         ch = val & 0xff;
 
         if (s->micom) {
-            clarion_micom_rx_byte(s->micom, ch);
+            s->micom_tx(s->micom, ch);
             break;
         }
         if (s->dispmicom) {
-            clarion_dispmicom_rx_byte(s->dispmicom, ch);
+            s->dispmicom_tx(s->dispmicom, ch);
             break;
         }
         if (s->ublox) {
-            clarion_ublox_rx_byte(s->ublox, ch);
+            s->ublox_tx(s->ublox, ch);
             break;
         }
 

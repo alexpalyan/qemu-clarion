@@ -2376,6 +2376,11 @@ static void qy8_init(MachineState *machine)
                           s->dmac,
                           i == QY8_SCIF_DEBUG &&
                           g_strcmp0(getenv("QY8_SCIF3_TXI"), "0") != 0);
+        sc->dma_feed = clarion_hpbdma_feed;
+        sc->dma_eod = clarion_hpbdma_eod;
+        sc->micom_tx = clarion_micom_rx_byte;
+        sc->dispmicom_tx = clarion_dispmicom_rx_byte;
+        sc->ublox_tx = clarion_ublox_rx_byte;
         if (i == QY8_SCIF_MICOM && s->micom) {
             sc->micom = s->micom;
             clarion_micom_set_sink(s->micom, qy8_micom_sink, sc);
