@@ -40,6 +40,7 @@
  */
 #define QY7_SCIF1_BASE 0xffe41000
 #define QY7_SCIF3_BASE 0xffe43000
+#define QY7_SCIF7_BASE 0xffe47000
 #define QY7_USBPHY_BASE 0xffe70800
 #define QY7_INT2_BASE 0xff804000
 
@@ -191,6 +192,8 @@ static void qy7_init(MachineState *machine)
     qy7_scif_with_alias(sysmem, QY7_SCIF1_BASE, "qy7.scif1", 1);
     /* SCIF3: the same polling routine, SCFSR at VA 0x2b0010. */
     qy7_scif_with_alias(sysmem, QY7_SCIF3_BASE, "qy7.scif3", 3);
+    /* SCIF7: the same polling routine, SCFSR at VA 0x2f0010. */
+    qy7_scif_with_alias(sysmem, QY7_SCIF7_BASE, "qy7.scif7", 7);
     clarion_usbphy_init(sysmem, QY7_USBPHY_BASE, 2, "qy7.usbphy");
 
     create_unimplemented_device("qy7.dbsc", 0xfe800000, 0x10000);
