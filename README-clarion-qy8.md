@@ -137,7 +137,7 @@ the same command line is merged with the first.
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-speed` | `0` | speed in knots; a nonzero value advances the position |
 | `gps-course` | `0` | course in degrees |
-| `du-dotclk` | `0` | display dot clock in Hz; `0` means no frame tick. Use `33333333` for the window |
+| `du-dotclk` | `33333333` | display dot clock in Hz; `0` disables frame ticks. This is the wrapper's default reference value, not a measured board clock |
 | `du-spi` | `31` | GIC line of the display frame interrupt |
 | `i2c-empty` | `off` | I2C0..I2C2 as empty buses: an immediate NACK instead of a bus timeout |
 | `i2c4` | `on` | Bounded I2C4 controller model at `0xffc73000` (the touchscreen bus) |
