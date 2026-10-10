@@ -1,3 +1,4 @@
+#include "config-host.h"
 #include <errno.h>
 #include <glib.h>
 #include <stdio.h>
@@ -176,7 +177,7 @@ int main(int argc, char **argv)
     }
     directory = g_path_get_dirname(program_path);
     emulator = g_strdup_printf("%s/qemu-system-%s", directory, board->target);
-    args = g_new0(char *, argc + 12);
+    args = g_new0(char *, argc + 14);
     args[arg_count++] = emulator;
     args[arg_count++] = (char *)"-M";
     args[arg_count++] = (char *)board->machine;
@@ -188,8 +189,15 @@ int main(int argc, char **argv)
     }
     user_console = has_console_argument(argc - first_arg, argv + first_arg);
     if (!user_console) {
-        args[arg_count++] = (char *)(headless ? "-nographic" : "-serial");
-        if (!headless) {
+        if (headless) {
+            args[arg_count++] = (char *)"-nographic";
+        } else {
+#ifdef CONFIG_DARWIN
+            /* The Cocoa window hides the pointer over the guest by default. */
+            args[arg_count++] = (char *)"-display";
+            args[arg_count++] = (char *)"cocoa,show-cursor=on";
+#endif
+            args[arg_count++] = (char *)"-serial";
             args[arg_count++] = (char *)"mon:stdio";
         }
     }

@@ -77,7 +77,9 @@ build-release/qemu-clarion -n --read-only flash-rw.bin map-card-rw.img
 The first two examples use a `QY8652NB` image. The launcher rejects an SD
 image for models without SDHI, including `QY7221NL`. By default it opens a
 display window and connects the guest console to the terminal with
-`-serial mon:stdio`. `--headless` selects `-nographic`. If you pass your own
+`-serial mon:stdio`; on macOS it also keeps the mouse pointer visible over
+the window (`-display cocoa,show-cursor=on`). `--headless` selects
+`-nographic`. If you pass your own
 `-serial`, `-display`, or `-nographic`, the launcher leaves console selection
 to you. For `QY7221NL` the launcher adds `-icount shift=2`, because that
 kernel does not survive host-clock timing; pass your own `-icount` to
