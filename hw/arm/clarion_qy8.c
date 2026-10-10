@@ -2921,10 +2921,9 @@ static void qy8_machine_instance_init(Object *obj)
         "номер лінії GIC (SPI) для кадрового переривання DU");
 
     /*
-     * The wrapper uses 33333333 Hz by default. It is an assumed reference
-     * clock, not a measured board value; with this clock the guest reaches
-     * its consent screen without extra machine options. Zero still disables
-     * frame ticks for tests that need the previous behavior.
+     * DU dot clock. 33333333 Hz is an assumed reference clock, not a
+     * measured board value; with it the guest reaches its consent screen
+     * without extra machine options. Zero disables frame ticks.
      */
     s->du_dotclk = 33333333;
     object_property_add_uint32_ptr(obj, "du-dotclk", &s->du_dotclk,
