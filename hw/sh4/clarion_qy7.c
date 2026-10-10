@@ -32,6 +32,12 @@
  * KernelIoControl hands to the display drivers.
  */
 #define QY7_RAM_SIZE (128 * MiB)
+/*
+ * TMU input clock. The CE kernel selects the /16 prescaler (TCR0 = 0x21)
+ * and counts 2625 ticks per millisecond, so the clock it was built for is
+ * 2625000 * 16 Hz. Taken from the guest, not measured on a board.
+ */
+#define QY7_TMU_CLOCK 42000000
 #define QY7_SCIF_BASE 0xffe46000
 /*
  * serial_scif.dll keeps a table of eight SCIF channels at 0xffe40000 +
@@ -167,7 +173,7 @@ static void qy7_init(MachineState *machine)
                                  &cpu->env.intc_handle);
     tmu012_init(sysmem, 0xffd80000,
                 TMU012_FEAT_TOCR | TMU012_FEAT_3CHAN | TMU012_FEAT_EXTCLK,
-                33333333, clarion_qy7_int2_timer_irq(int2, 0),
+                QY7_TMU_CLOCK, clarion_qy7_int2_timer_irq(int2, 0),
                 clarion_qy7_int2_timer_irq(int2, 1),
                 clarion_qy7_int2_timer_irq(int2, 2), NULL);
     reset = g_new0(QY7ResetData, 1);
