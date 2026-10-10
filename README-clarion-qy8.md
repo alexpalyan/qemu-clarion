@@ -3,6 +3,30 @@
 The `clarion_qy8` branch adds the `clarion-qy8` machine: an emulated board
 of the Clarion QY8XXX head unit (Renesas R-Car).
 
+## Quick start
+
+Build the launcher and both supported emulator targets:
+
+```sh
+mkdir -p build-release && cd build-release
+../configure --target-list=arm-softmmu,sh4-softmmu --disable-werror --enable-plugins --disable-docs
+ninja qemu-system-arm qemu-system-sh4 qemu-clarion
+cd ..
+```
+
+Place your NOR image at `flash-rw.bin` and the optional SD image at
+`map-card-rw.img`. Run with NOR only, NOR and SD, or read-only NOR and SD:
+
+```sh
+build-release/qemu-clarion flash-rw.bin
+build-release/qemu-clarion flash-rw.bin map-card-rw.img
+build-release/qemu-clarion --read-only flash-rw.bin map-card-rw.img
+```
+
+By default, the guest can write to both supplied images and those changes
+persist. Use `--read-only` to keep writes in temporary snapshots. Add
+`--headless` to run without a display window.
+
 No guest image is included in this repository. The machine boots from a
 raw 64 MiB flash image that you supply.
 
@@ -38,23 +62,25 @@ relevant directory.
 
 ## 3. Automatic launcher
 
-`qemu-clarion` reads the unit model from a `PROD` block in the supplied flash
+`qemu-clarion` reads the unit model from a `PROD` block in the supplied NOR
 image and selects both the emulator target and machine. It searches for the
-selected `qemu-system-*` binary beside itself. `-n` prints the command without
-starting QEMU.
+selected `qemu-system-*` binary beside itself. An optional second positional
+image is attached as SD. `-n` prints the command without starting QEMU.
 
 ```sh
 build-release/qemu-clarion -n flash-rw.bin
-build-release/qemu-clarion flash-rw.bin -nographic
-build-release/qemu-clarion qy8202na-nor.bin -machine dipsw=1 -nographic
-build-release/qemu-clarion qy7-nor.bin -machine dipsw=7 -snapshot -nographic
+build-release/qemu-clarion --read-only --headless flash-rw.bin
+build-release/qemu-clarion flash-rw.bin map-card-rw.img -serial mon:stdio
+build-release/qemu-clarion -n --read-only flash-rw.bin map-card-rw.img
 ```
 
-The first two examples use a `QY8652NB` image, the third uses a `QY8202NA`
-image, and the fourth uses a `QY7221NL` image. QY7
-flash images should be launched with `-snapshot` so guest writes are discarded.
-QY8 machine properties can be supplied with `-machine name=value`; they merge
-with the machine selected by the launcher.
+The first two examples use a `QY8652NB` image. The launcher rejects an SD
+image for models without SDHI, including `QY7221NL`. By default it opens a
+display window and connects the guest console to the terminal with
+`-serial mon:stdio`. `--headless` selects `-nographic`. If you pass your own
+`-serial`, `-display`, or `-nographic`, the launcher leaves console selection
+to you. QY8 machine properties can be supplied with `-machine name=value`;
+they merge with the machine selected by the launcher.
 
 ## 4. Supplying the flash image and running
 
