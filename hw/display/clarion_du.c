@@ -52,6 +52,7 @@
 #include "qom/object.h"
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
+#include <sys/mman.h>
 
 /* --- регістри (імена й зсуви — з rcar_du_regs.h) ---------------------- */
 
@@ -189,6 +190,12 @@ struct ClarionDuState {
     bool warned_swap;
     bool warned_dppr;
     bool warned_bpp;
+
+    /* frame rendered by the qy8gl plugin, blended over the planes */
+    int gl_fd;
+    uint8_t *gl_map;
+    size_t gl_len;
+    uint32_t gl_frame;
     bool warned_du_semantics;
     bool blend;
 };
@@ -507,6 +514,60 @@ static void du_draw_plane(ClarionDuState *s, int plane,
 
 /* --- вивід у вікно ---------------------------------------------------- */
 
+/*
+ * The qy8gl plugin draws the AUI's GL calls itself and publishes each frame
+ * in the file named by QY8_GL_FRAME: "QYGL", frame count, width, height, then
+ * RGBA rows bottom-up as GL keeps them. It covers the planes completely.
+ */
+static bool du_gl_overlay(ClarionDuState *s, uint32_t *fb, int w, int h,
+                          bool draw)
+{
+    const char *path = getenv("QY8_GL_FRAME");
+    struct stat st;
+    uint32_t hdr[4];
+
+    if (!path) {
+        return false;
+    }
+    if (!s->gl_map) {
+        s->gl_fd = open(path, O_RDONLY);
+        if (s->gl_fd < 0) {
+            return false;
+        }
+        if (fstat(s->gl_fd, &st) < 0 || st.st_size < 16) {
+            close(s->gl_fd);
+            return false;
+        }
+        s->gl_len = st.st_size;
+        s->gl_map = mmap(NULL, s->gl_len, PROT_READ, MAP_SHARED, s->gl_fd, 0);
+        if (s->gl_map == MAP_FAILED) {
+            s->gl_map = NULL;
+            close(s->gl_fd);
+            return false;
+        }
+    }
+    memcpy(hdr, s->gl_map, sizeof(hdr));
+    if (hdr[0] != 0x4c475951 || !hdr[1] ||
+        16 + (size_t)hdr[2] * hdr[3] * 4 > s->gl_len) {
+        return false;
+    }
+    if (!draw) {
+        return hdr[1] != s->gl_frame;
+    }
+    s->gl_frame = hdr[1];
+    for (int y = 0; y < h && y < (int)hdr[3]; y++) {
+        const uint8_t *src = s->gl_map + 16 +
+                             (size_t)(hdr[3] - 1 - y) * hdr[2] * 4;
+        uint32_t *row = fb + (size_t)y * w;
+
+        /* the AUI keeps a plane-mixing mask in alpha, not opacity */
+        for (int x = 0; x < w && x < (int)hdr[2]; x++, src += 4) {
+            row[x] = src[0] << 16 | src[1] << 8 | src[2];
+        }
+    }
+    return true;
+}
+
 static bool clarion_du_gfx_update(void *opaque)
 {
     ClarionDuState *s = opaque;
@@ -575,7 +636,7 @@ static bool clarion_du_gfx_update(void *opaque)
     }
 
     /* Без площин кадр — константа: перемальовуємо лише коли щось змінилось. */
-    if (!nplanes && !s->invalidate) {
+    if (!nplanes && !s->invalidate && !du_gl_overlay(s, NULL, w, h, false)) {
         return true;
     }
 
@@ -586,6 +647,7 @@ static bool clarion_du_gfx_update(void *opaque)
     for (int i = 0; i < nplanes; i++) {
         du_draw_plane(s, order[i], fb, w, h);
     }
+    du_gl_overlay(s, fb, w, h, true);
 
     dest = surface_data(surface);
     for (int y = 0; y < h; y++) {

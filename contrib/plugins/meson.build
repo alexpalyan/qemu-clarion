@@ -12,6 +12,7 @@ contrib_plugins = [
 'stoptrigger.c',
 'traps.c',
 'uftrace.c',
+'qy8gl.c',
 ]
 
 if host_os != 'windows'

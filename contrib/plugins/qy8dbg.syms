@@ -1,0 +1,7 @@
+# NK1 debug output entry points, same on the ZE0 and ZE1 builds
+541 0x4002992c OutputDebugStringW
+545 0x4002a9f8 NKDbgPrintfW
+568 0x4002a99c NKvDbgPrintfW
+1541 0xeff48e40 OutputDebugStringW
+1545 0xeff49b20 NKDbgPrintfW
+1568 0xeff49b04 NKvDbgPrintfW
