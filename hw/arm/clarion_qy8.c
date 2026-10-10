@@ -2921,12 +2921,12 @@ static void qy8_machine_instance_init(Object *obj)
         "номер лінії GIC (SPI) для кадрового переривання DU");
 
     /*
-     * Точкова частота DU. У регістрах її немає (ESCR02 = 0 — такт зовнішній,
-     * від TCON), виміряної теж немає, тож типово 0 = кадрового такту немає.
-     * 33333333 — опорний EXTAL плат R-Car M1A, правдоподібне, але НЕ
-     * доведене значення; вмикати свідомо.
+     * The wrapper uses 33333333 Hz by default. It is an assumed reference
+     * clock, not a measured board value; with this clock the guest reaches
+     * its consent screen without extra machine options. Zero still disables
+     * frame ticks for tests that need the previous behavior.
      */
-    s->du_dotclk = 0;
+    s->du_dotclk = 33333333;
     object_property_add_uint32_ptr(obj, "du-dotclk", &s->du_dotclk,
                                    OBJ_PROP_FLAG_READWRITE);
     object_property_set_description(obj, "du-dotclk",
