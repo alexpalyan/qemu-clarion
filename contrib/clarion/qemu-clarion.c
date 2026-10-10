@@ -90,6 +90,16 @@ static gboolean has_console_argument(int argc, char **argv)
     return FALSE;
 }
 
+static gboolean has_argument(int argc, char **argv, const char *name)
+{
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], name)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 static gboolean check_writable(const char *path, gboolean read_only)
 {
     if (!read_only && access(path, W_OK)) {
@@ -166,7 +176,7 @@ int main(int argc, char **argv)
     }
     directory = g_path_get_dirname(program_path);
     emulator = g_strdup_printf("%s/qemu-system-%s", directory, board->target);
-    args = g_new0(char *, argc + 10);
+    args = g_new0(char *, argc + 12);
     args[arg_count++] = emulator;
     args[arg_count++] = (char *)"-M";
     args[arg_count++] = (char *)board->machine;
@@ -182,6 +192,11 @@ int main(int argc, char **argv)
         if (!headless) {
             args[arg_count++] = (char *)"mon:stdio";
         }
+    }
+    if (board->icount &&
+        !has_argument(argc - first_arg, argv + first_arg, "-icount")) {
+        args[arg_count++] = (char *)"-icount";
+        args[arg_count++] = (char *)board->icount;
     }
     for (int i = first_arg; i < argc; i++) {
         args[arg_count++] = argv[i];
