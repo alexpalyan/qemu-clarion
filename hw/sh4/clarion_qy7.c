@@ -24,7 +24,13 @@
 
 #define QY7_FLASH_SIZE (8 * MiB)
 #define QY7_RAM_BASE 0x08000000
-#define QY7_RAM_SIZE (96 * MiB)
+/*
+ * The kernel's memory table lists regions up to 0x90000000 (P1), i.e.
+ * physical 0x08000000..0x10000000: main RAM, then the NK2 image, then a
+ * 1 MiB block at 0x0e600000 and a 25 MiB block at 0x0e700000 that
+ * KernelIoControl hands to the display drivers.
+ */
+#define QY7_RAM_SIZE (128 * MiB)
 #define QY7_SCIF_BASE 0xffe46000
 #define QY7_USBPHY_BASE 0xffe70800
 #define QY7_INT2_BASE 0xff804000
