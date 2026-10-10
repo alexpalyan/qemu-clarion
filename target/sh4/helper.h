@@ -1,5 +1,6 @@
 DEF_HELPER_1(ldtlb, void, env)
 DEF_HELPER_1(raise_illegal_instruction, noreturn, env)
+DEF_HELPER_1(raise_address_error, noreturn, env)
 DEF_HELPER_1(raise_slot_illegal_instruction, noreturn, env)
 DEF_HELPER_1(raise_fpu_disable, noreturn, env)
 DEF_HELPER_1(raise_slot_fpu_disable, noreturn, env)

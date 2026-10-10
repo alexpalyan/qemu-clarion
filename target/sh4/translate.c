@@ -2238,6 +2238,14 @@ static void sh4_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     CPUSH4State *env = cpu_env(cs);
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
 
+    if (unlikely(ctx->base.pc_next & 1)) {
+        gen_save_cpu_state(ctx, true);
+        gen_helper_raise_address_error(tcg_env);
+        ctx->base.pc_next += 2;
+        ctx->base.is_jmp = DISAS_NORETURN;
+        return;
+    }
+
 #ifdef CONFIG_USER_ONLY
     if (unlikely(ctx->envflags & TB_FLAG_GUSA_MASK)
         && !ctx->in_gusa_exclusive) {

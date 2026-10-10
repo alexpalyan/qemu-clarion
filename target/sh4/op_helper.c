@@ -70,6 +70,14 @@ void helper_raise_illegal_instruction(CPUSH4State *env)
     raise_exception(env, 0x180, 0);
 }
 
+void helper_raise_address_error(CPUSH4State *env)
+{
+    env->tea = env->pc;
+    env->pteh = (env->pteh & PTEH_ASID_MASK) |
+                (env->pc & PTEH_VPN_MASK);
+    raise_exception(env, 0x0e0, 0);
+}
+
 void helper_raise_slot_illegal_instruction(CPUSH4State *env)
 {
     raise_exception(env, 0x1a0, 0);
