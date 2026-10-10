@@ -1,92 +1,12 @@
-# Clarion QY8XXX in QEMU: building and running
+# The `clarion-qy8` machine: reference
 
-The `clarion_qy8` branch adds the `clarion-qy8` machine: an emulated board
-of the Clarion QY8XXX head unit (Renesas R-Car).
+Details of the `clarion-qy8` machine (QY8652NB and QY8202NA units): running
+the emulator directly, machine properties, serial ports, pointer input,
+diagnostics and the MIRROR renderer. For building and the everyday way to
+run a unit, see the [README](../../README.rst); the `qemu-clarion` launcher
+described there builds the command lines shown here for you.
 
-## Quick start
-
-Build the launcher and both supported emulator targets:
-
-```sh
-mkdir -p build-release && cd build-release
-../configure --target-list=arm-softmmu,sh4-softmmu --disable-werror --enable-plugins --disable-docs
-ninja qemu-system-arm qemu-system-sh4 qemu-clarion
-cd ..
-```
-
-Place your NOR image at `flash-rw.bin` and the optional SD image at
-`map-card-rw.img`. Run with NOR only, NOR and SD, or read-only NOR and SD:
-
-```sh
-build-release/qemu-clarion flash-rw.bin
-build-release/qemu-clarion flash-rw.bin map-card-rw.img
-build-release/qemu-clarion --read-only flash-rw.bin map-card-rw.img
-```
-
-By default, the guest can write to both supplied images and those changes
-persist. Use `--read-only` to keep writes in temporary snapshots. Add
-`--headless` to run without a display window.
-
-No guest image is included in this repository. The machine boots from a
-raw 64 MiB flash image that you supply.
-
-Tested on macOS (Apple Silicon). A Linux build should work the same way,
-but is not covered here.
-
-## 1. Dependencies
-
-* Xcode Command Line Tools;
-* Homebrew: `brew install ninja pkg-config glib pixman`;
-* Python 3 (`configure` creates its own venv with meson).
-
-## 2. Building
-
-The release build contains both supported Clarion targets. Run it by
-default; the optional debug build makes the guest noticeably slower.
-
-```sh
-# optimized build - use this one to run
-mkdir -p build-release && cd build-release
-../configure --target-list=arm-softmmu,sh4-softmmu --disable-werror --enable-plugins --disable-docs
-ninja qemu-system-arm qemu-system-sh4 qemu-clarion
-cd ..
-
-# debug build - only when you need QEMU assertions and symbols
-mkdir -p build && cd build
-../configure --target-list=arm-softmmu --disable-werror --enable-debug
-ninja qemu-system-arm
-```
-
-After a code change, rebuild the affected emulator and `qemu-clarion` in the
-relevant directory.
-
-## 3. Automatic launcher
-
-`qemu-clarion` reads the unit model from a `PROD` block in the supplied NOR
-image and selects both the emulator target and machine. It searches for the
-selected `qemu-system-*` binary beside itself. An optional second positional
-image is attached as SD. `-n` prints the command without starting QEMU.
-
-```sh
-build-release/qemu-clarion -n flash-rw.bin
-build-release/qemu-clarion --read-only --headless flash-rw.bin
-build-release/qemu-clarion flash-rw.bin map-card-rw.img -serial mon:stdio
-build-release/qemu-clarion -n --read-only flash-rw.bin map-card-rw.img
-```
-
-The first two examples use a `QY8652NB` image. The launcher rejects an SD
-image for models without SDHI, including `QY7221NL`. By default it opens a
-display window and connects the guest console to the terminal with
-`-serial mon:stdio`; on macOS it also keeps the mouse pointer visible over
-the window (`-display cocoa,show-cursor=on`). `--headless` selects
-`-nographic`. If you pass your own
-`-serial`, `-display`, or `-nographic`, the launcher leaves console selection
-to you. For `QY7221NL` the launcher adds `-icount shift=2`, because that
-kernel does not survive host-clock timing; pass your own `-icount` to
-override it. QY8 machine properties can be supplied with `-machine name=value`;
-they merge with the machine selected by the launcher.
-
-## 4. Supplying the flash image and running
+## 1. Supplying the flash image and running
 
 The machine has no kernel loader. It takes one raw image of the board's
 NOR flash (chip select 0, exactly 64 MiB, no OOB data), maps it at
@@ -122,7 +42,7 @@ build-release/qemu-system-arm -M clarion-qy8,du-dotclk=33333333 \
 `show-cursor=on` keeps the host cursor visible: the window hides it when
 an absolute pointer device is present.
 
-## 5. Machine properties
+## 2. Machine properties
 
 Set with `-M clarion-qy8,name=value`; a second `-machine name=value` on
 the same command line is merged with the first.
@@ -141,7 +61,7 @@ the same command line is merged with the first.
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-speed` | `0` | speed in knots; a nonzero value advances the position |
 | `gps-course` | `0` | course in degrees |
-| `du-dotclk` | `33333333` | display dot clock in Hz; `0` disables frame ticks. This is the wrapper's default reference value, not a measured board clock |
+| `du-dotclk` | `33333333` | display dot clock in Hz; `0` disables frame ticks. An assumed reference value, not a measured board clock |
 | `du-spi` | `31` | GIC line of the display frame interrupt |
 | `i2c-empty` | `off` | I2C0..I2C2 as empty buses: an immediate NACK instead of a bus timeout |
 | `i2c4` | `on` | Bounded I2C4 controller model at `0xffc73000` (the touchscreen bus) |
@@ -230,7 +150,7 @@ and functions are logged without a response; profile traffic is not modeled.
 Disable the model with `-M clarion-qy8,shcore=off` (or `QY8_SHCORE=off` with
 `tools/qy8_run.sh`).
 
-## 6. Serial ports and SD cards
+## 3. Serial ports and SD cards
 
 **`-serial` order.** The first one is SCIF3 (the console), then SCIF0,
 SCIF1, SCIF2, SCIF4, SCIF5, HSCIF0. With `micom=on` and `dispmicom=on`,
@@ -242,7 +162,7 @@ SCIF4 and SCIF1 are taken by the built-in models.
 -drive if=sd,index=0,format=raw,file=sd.img    # front slot; index=1 is the second one
 ```
 
-## 7. Pointer input
+## 4. Pointer input
 
 With `tma460-profile=on`, pointer events are reported only after the
 controller exits bootloader and enters working mode. Button transitions are
@@ -272,7 +192,7 @@ without it QEMU answers "Input handler not found":
 
 followed by the same event with `"down": false`.
 
-## 8. Diagnostics
+## 5. Diagnostics
 
 **Environment variables** (the main ones):
 
@@ -281,7 +201,7 @@ followed by the same event with `"down": false`.
 | `QY8_SCIF3_TXI=0` | disable the SCIF3 transmit interrupt |
 | `QY8_CAN=off` | remove the CAN controller model |
 | `QY8_SGX=off` | remove the GPU model |
-| `QY8_SGX_EXEC=1`, `QY8_SGX_NULLRENDER=all` | the mode MIRROR needs, see section 8 |
+| `QY8_SGX_EXEC=1`, `QY8_SGX_NULLRENDER=all` | the mode MIRROR needs, see the MIRROR section |
 | `QY8_UNIMP_PC=1` | add the guest code address to the unimplemented-peripheral log |
 
 **The usual QEMU tools:**
@@ -293,7 +213,7 @@ followed by the same event with `"down": false`.
 * `-monitor tcp:127.0.0.1:PORT,server,nowait` gives a monitor, including
   `screendump file.ppm`.
 
-## 9. MIRROR: GPU-rendered content in the window
+## 6. MIRROR: GPU-rendered content in the window
 
 The GPU model (`hw/display/clarion_sgx.c`) accepts commands but does not
 rasterize. MIRROR works around that: a TCG plugin intercepts the guest's
@@ -367,9 +287,9 @@ render as complete without drawing anything; the pixels come from the
 plugin only. Current limitation: only the first few frames are presented;
 the guest is not redrawn after that.
 
-## 10. Limitations
+## 7. Limitations
 
 * The GPU model does not rasterize; GPU-rendered content appears in the
-  window only through MIRROR (section 8).
+  window only through MIRROR (see the MIRROR section).
 * Not modeled: the CAN bus beyond the controller itself, USB, I2C devices
   other than the TMA460.

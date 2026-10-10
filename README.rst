@@ -1,171 +1,148 @@
-===========
-QEMU README
-===========
+============================
+Clarion head units in QEMU
+============================
 
-QEMU is a generic and open source machine & userspace emulator and
-virtualizer.
+This is a fork of `QEMU <https://www.qemu.org/>`_ that emulates the boards
+of Clarion head units fitted to the Nissan Leaf, well enough to boot their
+original Windows CE firmware. It exists to study and repair these units
+without risking the one in the car.
 
-QEMU is capable of emulating a complete machine in software without any
-need for hardware virtualization support. By using dynamic translation,
-it achieves very good performance. QEMU can also integrate with the Xen
-and KVM hypervisors to provide emulated hardware while allowing the
-hypervisor to manage the CPU. With hypervisor support, QEMU can achieve
-near native performance for CPUs. When QEMU emulates CPUs directly it is
-capable of running operating systems made for one machine (e.g. an ARMv7
-board) on a different machine (e.g. an x86_64 PC board).
+No firmware is included. You supply dumps taken from your own unit.
 
-QEMU is also capable of providing userspace API virtualization for Linux
-and BSD kernel interfaces. This allows binaries compiled against one
-architecture ABI (e.g. the Linux PPC64 ABI) to be run on a host using a
-different architecture ABI (e.g. the Linux x86_64 ABI). This does not
-involve any hardware emulation, simply CPU and syscall emulation.
+.. list-table::
+   :header-rows: 1
 
-QEMU aims to fit into a variety of use cases. It can be invoked directly
-by users wishing to have full control over its behaviour and settings.
-It also aims to facilitate integration into higher level management
-layers, by providing a stable command line interface and monitor API.
-It is commonly invoked indirectly via the libvirt library when using
-open source applications such as oVirt, OpenStack and virt-manager.
+   * - Unit
+     - CPU
+     - Machine
+     - Emulator
+     - State
+   * - QY8652NB
+     - ARM (Renesas R-Car)
+     - ``clarion-qy8``
+     - ``qemu-system-arm``
+     - boots to the user interface: consent screen, menu, touch input,
+       map screen with the map card
+   * - QY8202NA
+     - ARM (Renesas R-Car)
+     - ``clarion-qy8``
+     - ``qemu-system-arm``
+     - boots to the consent screen
+   * - QY7221NL
+     - SH-4A
+     - ``clarion-qy7``
+     - ``qemu-system-sh4``
+     - first-stage Windows CE 5.0 kernel and its drivers start; serial
+       console only, no display or SD card yet
 
-QEMU as a whole is released under the GNU General Public License,
-version 2. For full licensing details, consult the LICENSE file.
-
-
-Documentation
-=============
-
-Documentation can be found hosted online at
-`<https://www.qemu.org/documentation/>`_. The documentation for the
-current development version that is available at
-`<https://www.qemu.org/docs/master/>`_ is generated from the ``docs/``
-folder in the source tree, and is built by `Sphinx
-<https://www.sphinx-doc.org/en/master/>`_.
-
+Developed and tested on macOS (Apple Silicon). A Linux build should work
+the same way but is not covered here.
 
 Building
 ========
 
-QEMU is multi-platform software intended to be buildable on all modern
-Linux platforms, OS-X, Win32 (via the Mingw64 toolchain) and a variety
-of other UNIX targets. The simple steps to build QEMU are:
-
+Dependencies on macOS: Xcode Command Line Tools, Python 3, and
+``brew install ninja pkg-config glib pixman``.
 
 .. code-block:: shell
 
-  mkdir build
-  cd build
-  ../configure
-  make
+  mkdir -p build-release && cd build-release
+  ../configure --target-list=arm-softmmu,sh4-softmmu \
+      --disable-werror --enable-plugins --disable-docs
+  ninja qemu-system-arm qemu-system-sh4 qemu-clarion
+  cd ..
 
-Additional information can also be found online via the QEMU website:
+Use this optimized build to run units. A debug build
+(``../configure … --enable-debug`` in a separate ``build`` directory) is
+only for QEMU assertions and symbols: the guest is noticeably slower in it
+and the QY8 user interface misses its first screen.
 
-* `<https://wiki.qemu.org/Hosts/Linux>`_
-* `<https://wiki.qemu.org/Hosts/Mac>`_
-* `<https://wiki.qemu.org/Hosts/W32>`_
+Running a unit
+==============
 
-
-Submitting patches
-==================
-
-The QEMU source code is maintained under the GIT version control system.
-
-.. code-block:: shell
-
-   git clone https://gitlab.com/qemu-project/qemu.git
-
-When submitting patches, one common approach is to use 'git
-format-patch' and/or 'git send-email' to format & send the mail to the
-qemu-devel@nongnu.org mailing list. All patches submitted must contain
-a 'Signed-off-by' line from the author. Patches should follow the
-guidelines set out in the `style section
-<https://www.qemu.org/docs/master/devel/style.html>`_ of
-the Developers Guide.
-
-Additional information on submitting patches can be found online via
-the QEMU website:
-
-* `<https://wiki.qemu.org/Contribute/SubmitAPatch>`_
-* `<https://wiki.qemu.org/Contribute/TrivialPatches>`_
-
-The QEMU website is also maintained under source control.
+``qemu-clarion`` is a small launcher. It reads the unit model from the
+``PROD`` block of the NOR image, picks the emulator and machine for it, and
+starts QEMU. You never pass ``-M`` or ``-drive`` yourself.
 
 .. code-block:: shell
 
-  git clone https://gitlab.com/qemu-project/qemu-web.git
-
-* `<https://www.qemu.org/2017/02/04/the-new-qemu-website-is-up/>`_
-
-A 'git-publish' utility was created to make above process less
-cumbersome, and is highly recommended for making regular contributions,
-or even just for sending consecutive patch series revisions. It also
-requires a working 'git send-email' setup, and by default doesn't
-automate everything, so you may want to go through the above steps
-manually for once.
-
-For installation instructions, please go to:
-
-*  `<https://github.com/stefanha/git-publish>`_
-
-The workflow with 'git-publish' is:
+  qemu-clarion [-n] [--read-only] [--headless] NOR [SD] [QEMU arguments...]
 
 .. code-block:: shell
 
-  $ git checkout master -b my-feature
-  $ # work on new commits, add your 'Signed-off-by' lines to each
-  $ git publish
+  build-release/qemu-clarion flash.bin                          # NOR only
+  build-release/qemu-clarion flash.bin map-card.img             # NOR and SD card
+  build-release/qemu-clarion --read-only flash.bin map-card.img # leave both files untouched
+  build-release/qemu-clarion --headless flash.bin               # no window
+  build-release/qemu-clarion -n flash.bin map-card.img          # print the QEMU command and exit
 
-Your patch series will be sent and tagged as my-feature-v1 if you need to refer
-back to it in the future.
+.. list-table::
+   :header-rows: 1
 
-Sending v2:
+   * - Argument
+     - Meaning
+   * - ``NOR``
+     - raw dump of the unit's NOR flash: 64 MiB for QY8652NB and QY8202NA,
+       8 MiB for QY7221NL
+   * - ``SD``
+     - optional raw image of the SD card for the front slot; rejected for
+       units whose machine has no SD controller yet (QY7221NL)
+   * - ``--read-only``
+     - open both images with ``snapshot=on``: guest writes go to temporary
+       storage and the files do not change
+   * - ``--headless``
+     - run without a display window (``-nographic``)
+   * - ``-n``
+     - print the command line that would be run
+   * - anything after the images
+     - passed to QEMU unchanged, for example ``-machine dipsw=1``
 
-.. code-block:: shell
+**By default the guest writes to the images you pass**, as the real unit
+writes to its flash and card, and those changes survive a restart. Work on
+copies, or use ``--read-only``. Without ``--read-only`` the launcher refuses
+an image it cannot write to.
 
-  $ git checkout my-feature # same topic branch
-  $ # making changes to the commits (using 'git rebase', for example)
-  $ git publish
+What the launcher sets up unless you override it:
 
-Your patch series will be sent with 'v2' tag in the subject and the git tip
-will be tagged as my-feature-v2.
+* a display window and the guest console on the terminal
+  (``-serial mon:stdio``; ``Ctrl-A C`` switches to the QEMU monitor,
+  ``Ctrl-A X`` quits). Passing your own ``-serial``, ``-display`` or
+  ``-nographic`` turns this off;
+* on macOS, a visible mouse pointer over the window
+  (``-display cocoa,show-cursor=on``); a click is a touch;
+* for QY7221NL, ``-icount shift=2``. That kernel reprograms its tick timer
+  in a way that does not survive host-clock timing; pass your own
+  ``-icount`` to change it.
 
-Bug reporting
-=============
+The QY8 screen is not immediate: the consent screen appears after roughly
+45 to 100 seconds, depending on the host.
 
-The QEMU project uses GitLab issues to track bugs. Bugs
-found when running code built from QEMU git or upstream released sources
-should be reported via:
+Machine properties go in a ``-machine name=value`` argument and merge with
+the machine the launcher selected. ``dipsw`` selects the boot mode on every
+machine (``dipsw=1`` adds a step-by-step boot log on QY8). The
+``clarion-qy8`` properties, serial port layout, pointer input, diagnostics
+and the MIRROR renderer are described in
+`docs/clarion/clarion-qy8.md <docs/clarion/clarion-qy8.md>`_.
 
-* `<https://gitlab.com/qemu-project/qemu/-/issues>`_
+Limitations
+===========
 
-If using QEMU via an operating system vendor pre-built binary package, it
-is preferable to report bugs to the vendor's own bug tracker first. If
-the bug is also known to affect latest upstream code, it can also be
-reported via GitLab.
+* The PowerVR GPU is not modelled. GPU-rendered content reaches the window
+  through a built-in software path (``render=cpu``, the default).
+* Not modelled on QY8: the vehicle CAN bus beyond the controller itself,
+  USB, I2C devices other than the touch controller.
+* QY7221NL has no display, SD card or watchdog reset yet, so it stops where
+  its launcher would ask for the map card.
 
-For additional information on bug reporting consult:
+Relation to QEMU
+================
 
-* `<https://wiki.qemu.org/Contribute/ReportABug>`_
+The fork lives on the ``clarion_qy8`` branch and follows upstream QEMU; the
+Clarion code is in ``hw/arm/clarion_qy8.c``, ``hw/sh4/clarion_qy7.c``, the
+``clarion_*`` devices under ``hw/``, and ``contrib/clarion/``. Everything
+else is unmodified QEMU: see https://www.qemu.org/ for its documentation
+and https://gitlab.com/qemu-project/qemu for the source. QEMU is licensed
+under the GNU General Public License, version 2 (see ``COPYING`` and
+``LICENSE``).
 
-
-ChangeLog
-=========
-
-For version history and release notes, please visit
-`<https://wiki.qemu.org/ChangeLog/>`_ or look at the git history for
-more detailed information.
-
-
-Contact
-=======
-
-The QEMU community can be contacted in a number of ways, with the two
-main methods being email and IRC:
-
-* `<mailto:qemu-devel@nongnu.org>`_
-* `<https://lists.nongnu.org/mailman/listinfo/qemu-devel>`_
-* #qemu on irc.oftc.net
-
-Information on additional methods of contacting the community can be
-found online via the QEMU website:
-
-* `<https://wiki.qemu.org/Contribute/StartHere>`_
+This project is not affiliated with Nissan or Clarion.
