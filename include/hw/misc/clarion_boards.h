@@ -12,12 +12,13 @@ typedef struct ClarionBoardInfo {
     const char *name;
     const char *target;
     const char *machine;
+    int has_sd;
 } ClarionBoardInfo;
 
 static const ClarionBoardInfo clarion_boards[] = {
-    { "QY8652NB", "qy8652nb", "arm", "clarion-qy8" },
-    { "QY8202NA", "qy8202na", "arm", "clarion-qy8" },
-    { "QY7221NL", "qy7221nl", "sh4", "clarion-qy7" },
+    { "QY8652NB", "qy8652nb", "arm", "clarion-qy8", 1 },
+    { "QY8202NA", "qy8202na", "arm", "clarion-qy8", 1 },
+    { "QY7221NL", "qy7221nl", "sh4", "clarion-qy7", 0 },
 };
 
 #endif
