@@ -12,6 +12,7 @@
 #include "hw/misc/clarion_usbphy.h"
 #include "hw/misc/clarion_boards.h"
 #include "hw/sh4/clarion_sh4_core.h"
+#include "hw/sh4/sh.h"
 #include "hw/intc/clarion_qy7_int2.h"
 #include "hw/timer/tmu012.h"
 #include "hw/core/irq.h"
@@ -32,6 +33,12 @@
  */
 #define QY7_RAM_SIZE (128 * MiB)
 #define QY7_SCIF_BASE 0xffe46000
+/*
+ * serial_scif.dll keeps a table of eight SCIF channels at 0xffe40000 +
+ * 0x1000 * n. The guest maps channels 1, 3, 6 and 7 at boot (VirtualCopy
+ * from 0xffe41000, 0xffe43000, 0xffe46000, 0xffe47000).
+ */
+#define QY7_SCIF1_BASE 0xffe41000
 #define QY7_USBPHY_BASE 0xffe70800
 #define QY7_INT2_BASE 0xff804000
 
@@ -84,6 +91,25 @@ static void qy7_report_invalid_model(const char *model)
                  "supported: %s; use qemu-clarion",
                  model, supported->str);
     g_string_free(supported, true);
+}
+
+/*
+ * The guest reaches SCIF channels through user mappings (VirtualCopy),
+ * whose TLB entries hold a 29-bit physical address: 0xffe41010 arrives as
+ * 0x1fe41010 (area 7). Besides the P4 address, each channel therefore
+ * needs an alias at A7ADDR(base), as the timer has.
+ */
+static void qy7_scif_with_alias(MemoryRegion *sysmem, hwaddr base,
+                                const char *name, int index)
+{
+    ClarionScif *scif = g_new0(ClarionScif, 1);
+    MemoryRegion *alias = g_new0(MemoryRegion, 1);
+    g_autofree char *alias_name = g_strdup_printf("%s-a7", name);
+
+    clarion_scif_init(scif, sysmem, base, name, index, index, NULL, NULL,
+                      false);
+    memory_region_init_alias(alias, NULL, alias_name, &scif->mr, 0, 0x100);
+    memory_region_add_subregion(sysmem, A7ADDR(base), alias);
 }
 
 static void qy7_init(MachineState *machine)
@@ -157,6 +183,11 @@ static void qy7_init(MachineState *machine)
     clarion_sh4_core_init(cpu, sysmem);
     clarion_scif_init(g_new0(ClarionScif, 1), sysmem, QY7_SCIF_BASE, "qy7.scif",
                       0, 0, NULL, NULL, false);
+    /*
+     * SCIF1: the routine at serial_scif.dll+0x8c18 polls SCFSR.TEND
+     * (bit 6, offset 0x10) of this channel.
+     */
+    qy7_scif_with_alias(sysmem, QY7_SCIF1_BASE, "qy7.scif1", 1);
     clarion_usbphy_init(sysmem, QY7_USBPHY_BASE, 2, "qy7.usbphy");
 
     create_unimplemented_device("qy7.dbsc", 0xfe800000, 0x10000);
