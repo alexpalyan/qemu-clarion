@@ -9,6 +9,7 @@
 #
 # Result: OUT_DIR/qemu-clarion-TAG-OS-ARCH.tar.gz containing
 #   qemu-clarion            launcher
+#   qmp.py                  QMP helper (tap, screenshot, monitor)
 #   libexec/qemu-system-*   emulation engines
 #   lib/                    debug-print plugin and bundled shared libraries
 #   README.md COPYING
@@ -40,7 +41,7 @@ trap 'rm -rf "$stage"' EXIT
 root=$stage/$name
 
 mkdir -p "$root/libexec" "$root/lib"
-cp "$build/qemu-clarion" "$root/"
+cp "$build/qemu-clarion" "$src/scripts/clarion/qmp.py" "$root/"
 cp "$build/qemu-system-arm" "$build/qemu-system-sh4" "$root/libexec/"
 case $os in
 darwin) plugin_ext=dylib ;;
