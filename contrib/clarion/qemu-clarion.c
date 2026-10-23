@@ -134,8 +134,7 @@ int main(int argc, char **argv)
     const char *flash;
     const char *sd = NULL;
     char model[CLARION_PROD_MODEL_LEN + 1] = "";
-    const ClarionBoardInfo *board;
-    int untested;
+    const ClarionSeries *board;
     char *program_path;
     char *directory;
     char *emulator;
@@ -173,18 +172,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "qemu-clarion: no PROD block in %s\n", flash);
         return 1;
     }
-    board = clarion_board_find(model, &untested);
+    board = clarion_series_find(model);
     if (!board) {
-        fprintf(stderr, "qemu-clarion: unknown model %s; supported: ", model);
-        for (size_t i = 0; i < G_N_ELEMENTS(clarion_boards); i++) {
-            fprintf(stderr, "%s%s", i ? ", " : "", clarion_boards[i].model);
-        }
-        fputc('\n', stderr);
+        fprintf(stderr, "qemu-clarion: unknown model %s; expected a QY7 or "
+                "QY8 unit\n", model);
         return 1;
-    }
-    if (untested) {
-        fprintf(stderr, "qemu-clarion: warning: %s has not been tested; "
-                "using the %s machine\n", model, board->machine);
     }
     if (sd && !board->has_sd) {
         fprintf(stderr, "qemu-clarion: %s does not support an SD card\n",

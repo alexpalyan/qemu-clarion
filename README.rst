@@ -47,8 +47,8 @@ flash to the card.
      - ARM (Renesas R-Car)
      - ``clarion-qy8``
      - ``qemu-system-arm``
-     - not in the board table, run with the QY8 defaults (TMA460 touch);
-       boot to the consent screen, touch not checked
+     - same board as QY8202NA (TMA616 touch); boot to the consent screen,
+       touch accepted
    * - QY7221NL
      - SH-4A
      - ``clarion-qy7``
@@ -57,9 +57,11 @@ flash to the card.
        screen, touch input, map screen; MENU, MAP/VOICE, STATUS and ZERO
        EMISSION keys arrive over the vehicle CAN bus
 
-Other units run on the machine of their series, chosen by the ``QY7`` or
-``QY8`` prefix of the model, with a warning that the unit has not been
-tested.
+The launcher picks the machine from the ``QY7`` or ``QY8`` prefix of the
+unit model, so other units of these series run too. The QY8 machine picks
+the board from the firmware build named in the NK2 image header, not from
+the model: ``G214…`` builds are for the older board (TMA616 touch),
+``G218…`` builds for the ZE1 board (TMA460 touch).
 
 Developed and tested on macOS (Apple Silicon). A Linux build should work
 the same way but is not covered here.
