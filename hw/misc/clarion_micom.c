@@ -41,6 +41,7 @@
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "hw/misc/clarion_micom.h"
+#include "hw/misc/clarion_boards.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "system/runstate.h"
@@ -95,6 +96,8 @@ struct ClarionMicomState {
     bool generic_reply;
     uint8_t generic_reply_subcode;
     bool qy7_power_cycle;
+    bool qy7_power_cycle_ack_queued;
+    bool cur_is_qy7_power_cycle_ack;
 };
 
 /* --- frame construction ------------------------------------------------ */
@@ -160,6 +163,8 @@ static void micom_tx_expire(void *opaque)
     if (!s->cur) {
         s->cur = g_queue_pop_head(s->frames);
         s->cur_off = 0;
+        s->cur_is_qy7_power_cycle_ack = s->qy7_power_cycle_ack_queued;
+        s->qy7_power_cycle_ack_queued = false;
         if (!s->cur) {
             return;
         }
@@ -173,9 +178,17 @@ static void micom_tx_expire(void *opaque)
         s->cur_off += took;
     }
     if (s->cur_off >= s->cur->len) {
+        bool power_cycle = s->cur_is_qy7_power_cycle_ack;
+
         g_byte_array_free(s->cur, TRUE);
         s->cur = NULL;
         s->cur_off = 0;
+        s->cur_is_qy7_power_cycle_ack = false;
+        if (power_cycle) {
+            qemu_system_shutdown_request_with_code(
+                SHUTDOWN_CAUSE_GUEST_SHUTDOWN,
+                CLARION_POWER_CYCLE_EXIT_CODE);
+        }
         if (!g_queue_is_empty(s->frames)) {
             micom_arm(s, MICOM_GAP_NS);     /* inter-frame gap */
         }
@@ -311,7 +324,7 @@ static void micom_frame(ClarionMicomState *s)
                data[7] == 0x20) {
         /* POW::Acc Off Notify SystemEXE call observed at 0x039d572c. */
         action = "qy7-acc-on-power-cycle";
-        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        s->qy7_power_cycle_ack_queued = true;
     } else if (s->generic_reply) {
         /* QY8 fallback; QY7 disables synthetic replies by default. */
         const uint8_t recv[2] = { cmd, s->generic_reply_subcode };
@@ -389,8 +402,8 @@ void clarion_micom_rx_byte(DeviceState *dev, uint8_t b)
 
     case RX_BCC:
         if (b != s->bcc) {
-            qemu_log_mask(LOG_GUEST_ERROR, "clarion-micom: BCC %#x, expected "
-                          "%#x; processing frame anyway\n", b, s->bcc);
+            qemu_log_mask(LOG_GUEST_ERROR, "clarion-micom: BCC 0x%x, expected "
+                          "0x%x; processing frame anyway\n", b, s->bcc);
         }
         micom_frame(s);
         s->rx_state = RX_IDLE;

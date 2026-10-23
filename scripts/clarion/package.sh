@@ -5,11 +5,12 @@
 #
 # The build tree must be configured with
 #   --target-list=arm-softmmu,sh4-softmmu --enable-plugins
-# and have qemu-system-arm, qemu-system-sh4 and qemu-clarion built.
+# and have qemu-system-arm, qemu-system-sh4, qemu-img and qemu-clarion built.
 #
 # Result: OUT_DIR/qemu-clarion-TAG-OS-ARCH.tar.gz containing
 #   qemu-clarion            launcher
 #   libexec/qemu-system-*   emulation engines
+#   libexec/qemu-img        temporary read-only session overlays
 #   lib/                    debug-print plugin and bundled shared libraries
 #   README.md COPYING
 # The clarion machines load no data files at run time, so there is no share/.
@@ -41,7 +42,8 @@ root=$stage/$name
 
 mkdir -p "$root/libexec" "$root/lib"
 cp "$build/qemu-clarion" "$root/"
-cp "$build/qemu-system-arm" "$build/qemu-system-sh4" "$root/libexec/"
+cp "$build/qemu-system-arm" "$build/qemu-system-sh4" "$build/qemu-img" \
+    "$root/libexec/"
 case $os in
 darwin) plugin_ext=dylib ;;
 linux) plugin_ext=so ;;
@@ -52,6 +54,7 @@ cp "$src/COPYING" "$root/"
 cp "$src/docs/clarion/README-release.md" "$root/README.md"
 
 binaries=("$root/qemu-clarion" "$root"/libexec/qemu-system-* \
+          "$root/libexec/qemu-img" \
           "$root/lib/libclarion-dbgprint.$plugin_ext")
 
 bundle_macos() {
