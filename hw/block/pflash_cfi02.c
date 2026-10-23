@@ -498,18 +498,7 @@ static void pflash_write_buffer_data(PFlashCFI02 *pfl, hwaddr offset,
 
     if (pfl->wcycle == 3) {
         uint32_t words = (value & 0xffff) + 1;
-        uint32_t start = pfl->write_buffer_command_offset;
-        uint32_t sector_base;
-        SectorInfo sector_info = pflash_sector_info(pfl, start);
-
-        sector_base = start & ~(sector_info.len - 1);
-        if (width != pfl->width || words > pfl->write_buffer_size / width ||
-            start < pfl->write_buffer_window ||
-            start + words * width > pfl->write_buffer_window +
-                                     pfl->write_buffer_size ||
-            pfl->write_buffer_window < sector_base ||
-            pfl->write_buffer_window + pfl->write_buffer_size >
-                                      sector_base + sector_info.len) {
+        if (width != pfl->width || words > pfl->write_buffer_size / width) {
             pflash_write_buffer_abort(pfl);
             return;
         }
@@ -523,10 +512,32 @@ static void pflash_write_buffer_data(PFlashCFI02 *pfl, hwaddr offset,
     }
 
     if (pfl->wcycle == 4) {
-        if (width != pfl->width || offset < pfl->write_buffer_window ||
-            offset + width > pfl->write_buffer_window +
-                             pfl->write_buffer_size ||
+        if (width != pfl->width ||
             pfl->write_buffer_loaded >= pfl->write_buffer_words) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        if (pfl->write_buffer_loaded == 0) {
+            uint32_t start = pfl->write_buffer_command_offset;
+            SectorInfo sector_info = pflash_sector_info(pfl, start);
+            uint32_t sector_base = start & ~(sector_info.len - 1);
+            uint32_t window = offset & ~(pfl->write_buffer_size - 1);
+
+            if (offset < sector_base ||
+                offset + width > sector_base + sector_info.len ||
+                window < sector_base ||
+                window + pfl->write_buffer_size >
+                sector_base + sector_info.len) {
+                pflash_write_buffer_abort(pfl);
+                return;
+            }
+            pfl->write_buffer_window = window;
+        } else if (offset < pfl->write_buffer_window) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        if (offset + width > pfl->write_buffer_window +
+                             pfl->write_buffer_size) {
             pflash_write_buffer_abort(pfl);
             return;
         }
