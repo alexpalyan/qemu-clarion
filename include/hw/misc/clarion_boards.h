@@ -28,11 +28,13 @@ typedef struct ClarionSeries {
      * sleep forever, so its virtual time follows instructions.
      */
     const char *icount;
+    /* NOR offset of the kernel build string (QY7: NK1, QY8: NK2). */
+    unsigned long long build_off;
 } ClarionSeries;
 
 static const ClarionSeries clarion_series[] = {
-    { "QY7", "sh4", "clarion-qy7", 1, "shift=2" },
-    { "QY8", "arm", "clarion-qy8", 1, NULL },
+    { "QY7", "sh4", "clarion-qy7", 1, "shift=2", 0x40020 },
+    { "QY8", "arm", "clarion-qy8", 1, NULL, 0xac0016 },
 };
 
 static inline const ClarionSeries *clarion_series_find(const char *model)
