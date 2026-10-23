@@ -92,6 +92,8 @@ typedef struct QY7MachineState {
     uint8_t micom_generic_reply_subcode;
     bool micom_audio_off;
     bool micom_antitheft_release;
+    char *can_log_path;
+    char *can_replay_path;
     DeviceState *scpu;
     QEMUTimer *mcan_refresh;
     QEMUTimer *mcan_key_timer;
@@ -327,69 +329,97 @@ static void qy7_mcan_key(void *opaque, uint8_t code, bool down)
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + delay_ms * 1000 * 1000);
 }
 
-static void qy7_set_can_raw(Object *obj, const char *value, Error **errp)
+static bool qy7_parse_can_frame(const char *value, uint16_t *id,
+                                uint8_t data[8], unsigned *len)
 {
-    QY7MachineState *s = (QY7MachineState *)obj;
-    const char *sep = strchr(value, ':');
-    uint8_t data[8];
-    unsigned len = 0;
+    const char *sep = strchr(value, '#');
     char *id_text;
     char *end;
-    unsigned long id;
+    unsigned long parsed_id;
     const char *p;
 
-    if (!s->scpu) {
-        error_setg(errp, "can-raw is available after QY7 initialization");
-        return;
-    }
-    if (!sep || sep == value) {
-        error_setg(errp, "can-raw expects ID: byte [byte ...]");
-        return;
+    if (!sep || sep == value || sep - value > 8) {
+        return false;
     }
     id_text = g_strndup(value, sep - value);
     errno = 0;
-    id = g_ascii_strtoull(id_text, &end, 16);
-    if (errno || end == id_text || *end || id > 0x7ff) {
+    parsed_id = g_ascii_strtoull(id_text, &end, 16);
+    if (errno || end == id_text || *end || parsed_id > 0x7ff) {
         g_free(id_text);
-        error_setg(errp, "can-raw ID must be a 11-bit hexadecimal value");
-        return;
+        return false;
     }
     g_free(id_text);
 
     p = sep + 1;
     while (*p) {
-        unsigned long byte;
-
         while (g_ascii_isspace(*p) || *p == ',') {
             p++;
         }
         if (!*p) {
             break;
         }
-        if (len == sizeof(data) || !g_ascii_isxdigit(*p)) {
-            error_setg(errp, "can-raw expects 1 to 8 hexadecimal bytes");
-            return;
+        if (!g_ascii_isxdigit(p[0]) || !g_ascii_isxdigit(p[1]) ||
+            *len == 8) {
+            return false;
         }
-        errno = 0;
-        byte = g_ascii_strtoull(p, &end, 16);
-        if (errno || end == p || byte > 0xff ||
-            (*end && !g_ascii_isspace(*end) && *end != ',')) {
-            error_setg(errp, "invalid can-raw byte near '%s'", p);
-            return;
+        data[(*len)++] = g_ascii_xdigit_value(p[0]) * 16 +
+                         g_ascii_xdigit_value(p[1]);
+        p += 2;
+        if (*p && !g_ascii_isspace(*p) && *p != ',' &&
+            !g_ascii_isxdigit(*p)) {
+            return false;
         }
-        data[len++] = byte;
-        p = end;
     }
-    if (!len) {
-        error_setg(errp, "can-raw requires at least one data byte");
+    if (!*len) {
+        return false;
+    }
+    *id = parsed_id;
+    return true;
+}
+
+static void qy7_set_can_rx(Object *obj, const char *value, Error **errp)
+{
+    QY7MachineState *s = (QY7MachineState *)obj;
+    uint16_t id;
+    uint8_t data[8];
+    unsigned len = 0;
+
+    if (!s->scpu) {
+        error_setg(errp, "can-rx is available after QY7 initialization");
+        return;
+    }
+    if (!qy7_parse_can_frame(value, &id, data, &len)) {
+        error_setg(errp, "can-rx expects ID#DATA in hexadecimal");
         return;
     }
 
-    qemu_log("clarion-qy7: can-raw inject id=%03lx len=%u\n", id, len);
+    qemu_log("clarion-qy7: can-rx inject id=%03x len=%u\n", id, len);
     if (clarion_rcan_inject(s->rcan, id, data, len)) {
         return;
     }
     clarion_scpu_can_rx(s->scpu, id, data, len);
+}
+
+static void qy7_set_can_log(Object *obj, const char *value, Error **errp)
+{
+    QY7MachineState *s = (QY7MachineState *)obj;
+
+    g_free(s->can_log_path);
+    s->can_log_path = g_strdup(value);
+    if (s->rcan) {
+        clarion_rcan_set_log(s->rcan, value);
+    }
+}
+
+static void qy7_set_can_replay(Object *obj, const char *value, Error **errp)
+{
+    QY7MachineState *s = (QY7MachineState *)obj;
+
+    g_free(s->can_replay_path);
+    s->can_replay_path = g_strdup(value);
+    if (s->rcan) {
+        clarion_rcan_set_replay(s->rcan, value);
+    }
 }
 
 static bool qy7_get_micom_generic_reply(Object *obj, Error **errp)
@@ -584,6 +614,12 @@ static void qy7_init(MachineState *machine)
 
     qmachine->rcan = clarion_rcan_init(sysmem, 0x1ffd0000,
                                        clarion_qy7_int2_rcan_irq(int2));
+    if (qmachine->can_log_path) {
+        clarion_rcan_set_log(qmachine->rcan, qmachine->can_log_path);
+    }
+    if (qmachine->can_replay_path) {
+        clarion_rcan_set_replay(qmachine->rcan, qmachine->can_replay_path);
+    }
 
     pflash_cfi02_register(0, "qy7.flash", QY7_FLASH_SIZE,
                           dinfo ? blk_by_legacy_dinfo(dinfo) : NULL, 64 * KiB,
@@ -804,9 +840,16 @@ static void qy7_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_set_description(oc, "bcm",
         "Synthetic body control module answering the antitheft CAN "
         "exchange (default on)");
-    object_class_property_add_str(oc, "can-raw", NULL, qy7_set_can_raw);
-    object_class_property_set_description(oc, "can-raw",
-        "Inject one raw CAN frame on QY7 as ID: hexadecimal data bytes");
+    object_class_property_add_str(oc, "can-rx", NULL, qy7_set_can_rx);
+    object_class_property_set_description(oc, "can-rx",
+        "Inject one CAN frame on QY7 as ID#DATA in hexadecimal");
+    object_class_property_add_str(oc, "can-log", NULL, qy7_set_can_log);
+    object_class_property_set_description(oc, "can-log",
+        "Append QY7 CAN frames and mode changes to this file");
+    object_class_property_add_str(oc, "can-replay", NULL,
+                                  qy7_set_can_replay);
+    object_class_property_set_description(oc, "can-replay",
+        "Replay period_ms ID#DATA lines from this file");
     object_class_property_add_bool(oc, "micom-generic-reply",
                                    qy7_get_micom_generic_reply,
                                    qy7_set_micom_generic_reply);

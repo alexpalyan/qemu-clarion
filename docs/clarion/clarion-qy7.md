@@ -76,23 +76,43 @@ The diagnostic does not validate command semantics, so use it with a
 read-only guest run. It is enabled only on `clarion-qy7`; QY8 does not enable
 the key input or this property.
 
-The QY7 machine also exposes a write-only `can-raw` QOM property for
-diagnosing CAN receive frames. Its value is an 11-bit hexadecimal CAN ID, a
-colon, and one to eight hexadecimal data bytes. QEMU first offers the frame
-to configured RCAN receive mailboxes; if no mailbox accepts the ID, it wraps
-the bytes in the sub-CPU `0x65` receive message and queues it on the UART path.
-This does not model a CAN responder or confirm that a guest driver accepted
-the frame.
+## CAN receive, logging, and replay
 
-For example, send a `PUSH_SW`-shaped body to the SCPU-only ID `0x0280`:
+The QY7 machine exposes the same CAN properties as QY8. `can-rx` is a
+write-only QOM property whose value is a can-utils style hexadecimal
+`ID#DATA` frame. QEMU offers the frame to configured RCAN receive mailboxes;
+if none accepts it, the machine preserves the established SCPU `0x65` receive
+path. This models an injected frame, not a CAN responder, and does not by
+itself confirm that a guest driver accepted it.
+
+For example, inject the `PUSH_SW`-shaped frame used by the T253 check:
 
 ```json
-{"execute":"qom-set","arguments":{"path":"/machine","property":"can-raw","value":"0280:40 0d 81"}}
-{"execute":"qom-set","arguments":{"path":"/machine","property":"can-raw","value":"0280:40 0d 01"}}
+{"execute":"qom-set","arguments":{"path":"/machine","property":"can-rx","value":"280#400d81"}}
+{"execute":"qom-set","arguments":{"path":"/machine","property":"can-rx","value":"280#400d01"}}
 ```
 
-Spaces or commas may separate data bytes. Use it with a read-only guest run;
-the machine accepts the property only after its QY7 sub-CPU is initialized.
+Set `can-log` and `can-replay` as machine properties at launch:
+
+```sh
+build-release/qemu-clarion --read-only --headless \\
+    -M clarion-qy7,can-log=/tmp/qy7-can.log,can-replay=/tmp/can-replay.txt \\
+    qy7-nor.bin map-card.img
+```
+
+`can-log` appends TX/RX frames and mode/filter changes. Frame records have the
+same fields on QY7 and QY8: guest virtual milliseconds, direction, mailbox,
+ID, format, DLC, and data. `can-replay` reads one periodic frame per line;
+blank lines and lines beginning with `#` are ignored:
+
+```text
+# period in ms, then ID#DATA
+100 280#400d81
+```
+
+The RCAN mailbox mechanism and interrupt behavior are unchanged. An injected
+frame with no configured mailbox is logged with `mailbox=-1` before using the
+existing SCPU receive path.
 
 Dynamic QY7 replay confirmed that each tested subtype `36 86 60 xx yy`,
 `36 83 3B FF xx`, and `36 86 6A xx yy` reaches the `lcddrv` key queue,
