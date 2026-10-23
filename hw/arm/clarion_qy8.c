@@ -63,6 +63,7 @@
 #include "system/block-backend.h"
 #include "system/blockdev.h"
 #include "system/system.h"
+#include "system/runstate.h"
 #include "system/address-spaces.h"
 #include "chardev/char-fe.h"
 #include "hw/core/ptimer.h"
@@ -1462,6 +1463,15 @@ typedef struct Qy8Mstp {
     const char *name;
 } Qy8Mstp;
 
+typedef struct Qy8Rst {
+    MemoryRegion mr;
+    QEMUTimer *wdt_timer;
+    uint32_t wtcsr;
+    uint32_t wtcnt;
+    uint32_t wdt_period;
+    uint32_t rst_wdt;
+} Qy8Rst;
+
 #define QY8_NUM_MSTP 6
 
 static const struct { hwaddr pa; const char *name; } qy8_mstp_regs[QY8_NUM_MSTP] = {
@@ -1495,6 +1505,119 @@ static void qy8_mstp_write(void *opaque, hwaddr addr, uint64_t val,
 static const MemoryRegionOps qy8_mstp_ops = {
     .read = qy8_mstp_read,
     .write = qy8_mstp_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl.min_access_size = 4,
+    .impl.max_access_size = 4,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+};
+
+/*
+ * QY8652NB nk.exe @0x88015D34 enables the watchdog at 0xFFCC0004 and
+ * spins at 0x88015D40. The board launcher handles the resulting overflow
+ * as a fresh process and preserves read-only session overlays.
+ */
+#define QY8_RST_BASE 0xFFCC0000
+
+static void qy8_rst_expire(void *opaque)
+{
+    (void)opaque;
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "qy8.rst: watchdog overflow; power cycling QEMU\n");
+    qemu_system_shutdown_request_with_code(
+        SHUTDOWN_CAUSE_GUEST_SHUTDOWN,
+        CLARION_POWER_CYCLE_EXIT_CODE);
+}
+
+static uint64_t qy8_rst_read(void *opaque, hwaddr addr, unsigned size)
+{
+    Qy8Rst *s = opaque;
+
+    (void)size;
+
+    switch (addr) {
+    case 0:
+        return s->wtcnt;
+    case 4:
+        return s->wtcsr;
+    case 8:
+        return s->rst_wdt;
+    default:
+        return 0;
+    }
+}
+
+static void qy8_rst_reload(Qy8Rst *s)
+{
+    uint64_t timeout_ns;
+
+    if (s->wdt_period == 0) {
+        timer_del(s->wdt_timer);
+        return;
+    }
+    timeout_ns = (uint64_t)s->wdt_period * NANOSECONDS_PER_SECOND / 50000;
+    if (timeout_ns == 0) {
+        timeout_ns = 1;
+    }
+    timer_mod(s->wdt_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              timeout_ns);
+}
+
+static void qy8_rst_write(void *opaque, hwaddr addr, uint64_t val,
+                          unsigned size)
+{
+    Qy8Rst *s = opaque;
+
+    if (size != 4) {
+        return;
+    }
+
+    if (addr == 0 && (val >> 24) == 0x5A) {
+        s->wtcnt = val & 0x00FFFFFF;
+        if (s->wtcnt > s->wdt_period) {
+            s->wdt_period = s->wtcnt;
+        }
+        if (s->wtcsr & 0x80) {
+            qy8_rst_reload(s);
+        }
+    } else if (addr == 4 && (val >> 24) == 0xA5) {
+        s->wtcsr = val & 0xFF;
+        if (s->wtcsr & 0x80) {
+            /*
+             * nk.exe's timeout helper (0x88015BBC) maps 0 to the default
+             * value 25 and seconds to 50,000 counts per second. A zero
+             * WTCNT write is the guest's watchdog feed; retain the last
+             * nonzero period and reload it. The updater helper at
+             * 0x88015D20 sets 25; 0x88015D3C enables the timer before the
+             * guest spins at 0x88015D40.
+             */
+            qy8_rst_reload(s);
+        } else {
+            timer_del(s->wdt_timer);
+        }
+    } else if (addr == 8 && (val >> 24) == 0x55) {
+        s->rst_wdt = val;
+        if ((val & 0x00FFFFFF) > s->wdt_period) {
+            s->wdt_period = val & 0x00FFFFFF;
+        }
+        if (s->wtcsr & 0x80) {
+            qy8_rst_reload(s);
+        }
+    } else {
+        qemu_log_mask(LOG_UNIMP,
+                      "qy8.rst: unmodeled write offset=0x%"
+                      HWADDR_PRIx " size=%u value=0x%" PRIx64 "\n",
+                      addr, size, val);
+        return;
+    }
+
+    qemu_log_mask(LOG_UNIMP, "qy8.rst: write offset=0x%" HWADDR_PRIx
+                  " value=0x%" PRIx64 "\n", addr, val);
+}
+
+static const MemoryRegionOps qy8_rst_ops = {
+    .read = qy8_rst_read,
+    .write = qy8_rst_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .impl.min_access_size = 4,
     .impl.max_access_size = 4,
@@ -1655,6 +1778,7 @@ struct Qy8MachineState {
     Qy8Int2Line int2_usb;
     Qy8Int2Line int2_shcore;
     Qy8Mstp mstp[QY8_NUM_MSTP];
+    Qy8Rst rst;
     Qy8Periph periph;
     MemoryRegion voidmr;
 
@@ -2583,7 +2707,11 @@ static void qy8_init(MachineState *machine)
     create_unimplemented_device("qy8.intc2", 0xFE780000, 0x1000);
     create_unimplemented_device("qy8.cpg",   0xFFC80000, 0x1000);
     create_unimplemented_device("qy8.pfc",   0xFFFC0000, 0x1000);
-    create_unimplemented_device("qy8.rst",   0xFFCC0000, 0x1000);
+    s->rst.wdt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, qy8_rst_expire,
+                                    &s->rst);
+    memory_region_init_io(&s->rst.mr, NULL, &qy8_rst_ops, &s->rst,
+                          "qy8.rst", 0x1000);
+    memory_region_add_subregion_overlap(sysmem, QY8_RST_BASE, &s->rst.mr, 1);
     /* Broad interceptor: log everything else from 0xF0000000 upward. */
     /*
      * Broad interceptor for other accesses from 0xF0000000 upward. This model
