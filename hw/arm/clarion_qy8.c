@@ -2050,6 +2050,7 @@ static void qy8_init(MachineState *machine)
 
         qdev_prop_set_drive(fl, "drive",
                             blk_by_legacy_dinfo(s->flash_drive));
+        qdev_prop_set_uint32(fl, "write-buffer-size", 1024);
         qdev_prop_set_uint32(fl, "num-blocks",
                              QY8_FLASH_SIZE / QY8_FLASH_SECTOR);
         qdev_prop_set_uint32(fl, "sector-length", QY8_FLASH_SECTOR);
