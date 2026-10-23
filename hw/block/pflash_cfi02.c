@@ -57,11 +57,14 @@
  * seems common) without changing the PRT table address.
  */
 #define PFLASH_MAX_ERASE_REGIONS 4
+#define PFLASH_MAX_WRITE_BUFFER_SIZE 1024
 
 /* Special write cycles for CFI queries. */
 enum {
     WCYCLE_CFI              = 7,
     WCYCLE_AUTOSELECT_CFI   = 8,
+    WCYCLE_WRITE_BUFFER_ABORT_UNLOCK1 = 9,
+    WCYCLE_WRITE_BUFFER_ABORT_CONFIRM = 10,
 };
 
 struct PFlashCFI02 {
@@ -72,6 +75,7 @@ struct PFlashCFI02 {
     BlockBackend *blk;
     uint32_t uniform_nb_blocs;
     uint32_t uniform_sector_len;
+    uint32_t write_buffer_size;
     int32_t total_sectors;
     uint32_t nb_blocs[PFLASH_MAX_ERASE_REGIONS];
     uint32_t sector_len[PFLASH_MAX_ERASE_REGIONS];
@@ -106,6 +110,13 @@ struct PFlashCFI02 {
     int sectors_to_erase;
     uint64_t erase_time_remaining;
     unsigned long *sector_erase_map;
+    uint32_t write_buffer_command_offset;
+    uint32_t write_buffer_window;
+    uint32_t write_buffer_words;
+    uint32_t write_buffer_loaded;
+    uint32_t write_buffer_last;
+    uint8_t write_buffer_data[PFLASH_MAX_WRITE_BUFFER_SIZE];
+    uint8_t write_buffer_valid[PFLASH_MAX_WRITE_BUFFER_SIZE];
     char *name;
     void *storage;
     VMChangeStateEntry *vmstate;
@@ -115,7 +126,7 @@ static int pflash_post_load(void *opaque, int version_id);
 
 static const VMStateDescription vmstate_pflash = {
     .name = "pflash_cfi02",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .post_load = pflash_post_load,
     .fields = (const VMStateField[]) {
@@ -129,6 +140,15 @@ static const VMStateDescription vmstate_pflash = {
         VMSTATE_INT32(sectors_to_erase, PFlashCFI02),
         VMSTATE_UINT64(erase_time_remaining, PFlashCFI02),
         VMSTATE_BITMAP(sector_erase_map, PFlashCFI02, 1, total_sectors),
+        VMSTATE_UINT32_V(write_buffer_command_offset, PFlashCFI02, 2),
+        VMSTATE_UINT32_V(write_buffer_window, PFlashCFI02, 2),
+        VMSTATE_UINT32_V(write_buffer_words, PFlashCFI02, 2),
+        VMSTATE_UINT32_V(write_buffer_loaded, PFlashCFI02, 2),
+        VMSTATE_UINT32_V(write_buffer_last, PFlashCFI02, 2),
+        VMSTATE_UINT8_ARRAY_V(write_buffer_data, PFlashCFI02,
+                              PFLASH_MAX_WRITE_BUFFER_SIZE, 2),
+        VMSTATE_UINT8_ARRAY_V(write_buffer_valid, PFlashCFI02,
+                              PFLASH_MAX_WRITE_BUFFER_SIZE, 2),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -268,6 +288,12 @@ static void pflash_timer(void *opaque)
         reset_dq3(pfl);
     }
 
+    if (pfl->cmd == 0x25) {
+        set_dq7(pfl, pfl->write_buffer_last);
+        pflash_mode_read_array(pfl);
+        return;
+    }
+
     /* Reset flash */
     toggle_dq7(pfl);
     if (pfl->bypass) {
@@ -400,6 +426,11 @@ static uint64_t pflash_read(void *opaque, hwaddr offset, unsigned int width)
         ret = pfl->status;
         trace_pflash_read_status(pfl->name, ret);
         break;
+    case 0x25: /* Write to Buffer */
+        toggle_dq6(pfl);
+        ret = pfl->status;
+        trace_pflash_read_status(pfl->name, ret);
+        break;
     case 0x98:
         /* CFI query mode */
         if (boff < sizeof(pfl->cfi_table)) {
@@ -452,6 +483,131 @@ static void pflash_sector_erase(PFlashCFI02 *pfl, hwaddr offset)
     timer_mod(&pfl->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 50000);
 }
 
+static void pflash_write_buffer_abort(PFlashCFI02 *pfl)
+{
+    trace_pflash_write_block_abort(pfl->name);
+    pfl->status |= 0x02;
+    pfl->wcycle = 6;
+}
+
+static void pflash_write_buffer_data(PFlashCFI02 *pfl, hwaddr offset,
+                                     uint64_t value, unsigned int width)
+{
+    uint32_t index;
+    uint8_t *data;
+
+    if (pfl->wcycle == 3) {
+        uint32_t words = (value & 0xffff) + 1;
+        if (width != pfl->width || words > pfl->write_buffer_size / width) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        pfl->write_buffer_words = words;
+        pfl->write_buffer_loaded = 0;
+        memset(pfl->write_buffer_valid, 0, sizeof(pfl->write_buffer_valid));
+        trace_pflash_write_block_start(pfl->name,
+                                       words * pfl->width);
+        pfl->wcycle = 4;
+        return;
+    }
+
+    if (pfl->wcycle == 4) {
+        if (width != pfl->width ||
+            pfl->write_buffer_loaded >= pfl->write_buffer_words) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        if (pfl->write_buffer_loaded == 0) {
+            uint32_t start = pfl->write_buffer_command_offset;
+            SectorInfo sector_info = pflash_sector_info(pfl, start);
+            uint32_t sector_base = start & ~(sector_info.len - 1);
+            uint32_t window = offset & ~(pfl->write_buffer_size - 1);
+
+            if (offset < sector_base ||
+                offset + width > sector_base + sector_info.len ||
+                window < sector_base ||
+                window + pfl->write_buffer_size >
+                sector_base + sector_info.len) {
+                pflash_write_buffer_abort(pfl);
+                return;
+            }
+            pfl->write_buffer_window = window;
+        } else if (offset < pfl->write_buffer_window) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        if (offset + width > pfl->write_buffer_window +
+                             pfl->write_buffer_size) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        index = offset - pfl->write_buffer_window;
+        if (index % width) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        data = pfl->write_buffer_data + index;
+        if (pfl->be) {
+            stn_be_p(data, width, value);
+        } else {
+            stn_le_p(data, width, value);
+        }
+        memset(pfl->write_buffer_valid + index, 1, width);
+        pfl->write_buffer_last = value;
+        trace_pflash_data_write_block(pfl->name, offset, width, value,
+                                      pfl->write_buffer_loaded);
+        pfl->write_buffer_loaded++;
+        if (pfl->write_buffer_loaded == pfl->write_buffer_words) {
+            pfl->wcycle = 5;
+        }
+        return;
+    }
+
+    if (pfl->wcycle == 5) {
+        uint32_t end = 0;
+        uint32_t start = pfl->write_buffer_size;
+        uint8_t *storage = pfl->storage;
+
+        if (value != 0x29 || offset != pfl->write_buffer_command_offset) {
+            pflash_write_buffer_abort(pfl);
+            return;
+        }
+        for (index = 0; index < pfl->write_buffer_size; index += width) {
+            if (!pfl->write_buffer_valid[index]) {
+                continue;
+            }
+            data = storage + pfl->write_buffer_window + index;
+            uint8_t *buffer_data = pfl->write_buffer_data + index;
+            uint64_t current = pfl->be ? ldn_be_p(data, width) :
+                                         ldn_le_p(data, width);
+            uint64_t new_value = pfl->be ? ldn_be_p(buffer_data, width) :
+                                           ldn_le_p(buffer_data, width);
+            if (!pfl->ro) {
+                if (pfl->be) {
+                    stn_be_p(data, width, current & new_value);
+                } else {
+                    stn_le_p(data, width, current & new_value);
+                }
+            }
+            start = MIN(start, index);
+            end = MAX(end, index + width);
+        }
+        if (start < end && !pfl->ro) {
+            pflash_update(pfl, pfl->write_buffer_window + start, end - start);
+        }
+        trace_pflash_write_block_flush(pfl->name);
+        set_dq7(pfl, ~pfl->write_buffer_last);
+        pfl->status &= ~0x02;
+        pfl->cmd = 0x25;
+        pfl->wcycle = 6;
+        timer_mod(&pfl->timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SCALE_MS);
+        return;
+    }
+
+    pflash_write_buffer_abort(pfl);
+}
+
 static void pflash_write(void *opaque, hwaddr offset, uint64_t value,
                          unsigned int width)
 {
@@ -484,6 +640,31 @@ static void pflash_write(void *opaque, hwaddr offset, uint64_t value,
     }
     /* Only the least-significant 11 bits are used in most cases. */
     boff &= 0x7FF;
+
+    if (pfl->cmd == 0x25) {
+        if (pfl->wcycle == 6) {
+            if (boff == pfl->unlock_addr0 && cmd == 0xAA) {
+                pfl->wcycle = WCYCLE_WRITE_BUFFER_ABORT_UNLOCK1;
+            }
+            return;
+        }
+        if (pfl->wcycle == WCYCLE_WRITE_BUFFER_ABORT_UNLOCK1) {
+            if (boff == pfl->unlock_addr1 && cmd == 0x55) {
+                pfl->wcycle = WCYCLE_WRITE_BUFFER_ABORT_CONFIRM;
+            } else {
+                pfl->wcycle = 6;
+            }
+            return;
+        }
+        if (pfl->wcycle == WCYCLE_WRITE_BUFFER_ABORT_CONFIRM) {
+            /* 0xF0 is handled by reset_flash above. */
+            pfl->wcycle = 6;
+            return;
+        }
+        pflash_write_buffer_data(pfl, offset, value, width);
+        return;
+    }
+
     switch (pfl->wcycle) {
     case 0:
         /* Set the device in I/O access mode if required */
@@ -537,6 +718,18 @@ static void pflash_write(void *opaque, hwaddr offset, uint64_t value,
         break;
     case 2:
         /* We finished an unlock sequence */
+        if (cmd == 0x25 && pfl->write_buffer_size) {
+            pfl->write_buffer_command_offset = offset;
+            pfl->write_buffer_window = offset &
+                                       ~(pfl->write_buffer_size - 1);
+            pfl->write_buffer_words = 0;
+            pfl->write_buffer_loaded = 0;
+            memset(pfl->write_buffer_valid, 0,
+                   sizeof(pfl->write_buffer_valid));
+            pfl->cmd = 0x25;
+            pfl->wcycle = 3;
+            return;
+        }
         if (!pfl->bypass && boff != pfl->unlock_addr0) {
             trace_pflash_write_failed(pfl->name, boff, cmd);
             goto reset_flash;
@@ -721,6 +914,10 @@ static void pflash_write(void *opaque, hwaddr offset, uint64_t value,
 
     /* Reset flash */
  reset_flash:
+    if (pfl->cmd == 0x25) {
+        pfl->status &= ~0x02;
+        timer_del(&pfl->timer);
+    }
     pfl->bypass = 0;
     pflash_reset_state_machine(pfl);
     return;
@@ -788,12 +985,9 @@ static void pflash_cfi02_fill_cfi_table(PFlashCFI02 *pfl, int nb_regions)
     pfl->cfi_table[0x28] = 0x02;
     pfl->cfi_table[0x29] = 0x00;
     /* Max number of bytes in multi-bytes write */
-    /*
-     * XXX: disable buffered write as it's not supported
-     * pfl->cfi_table[0x2A] = 0x05;
-     */
-    pfl->cfi_table[0x2A] = 0x00;
-    pfl->cfi_table[0x2B] = 0x00;
+    /* Keep buffered writes undisclosed; selected guests may issue 0x25. */
+    pfl->cfi_table[0x2A] = 0;
+    pfl->cfi_table[0x2B] = 0;
     /* Number of erase block regions */
     pfl->cfi_table[0x2c] = nb_regions;
     /* Erase block regions */
@@ -841,6 +1035,15 @@ static void pflash_cfi02_realize(DeviceState *dev, Error **errp)
     ERRP_GUARD();
     PFlashCFI02 *pfl = PFLASH_CFI02(dev);
     int ret;
+
+    if (pfl->write_buffer_size &&
+        (!pfl->width || pfl->write_buffer_size % pfl->width ||
+         pfl->write_buffer_size > PFLASH_MAX_WRITE_BUFFER_SIZE ||
+         !is_power_of_2(pfl->write_buffer_size))) {
+        error_setg(errp, "unsupported write buffer size: %u",
+                   pfl->write_buffer_size);
+        return;
+    }
 
     if (pfl->uniform_sector_len == 0 && pfl->sector_len[0] == 0) {
         error_setg(errp, "attribute \"sector-length\" not specified or zero.");
@@ -958,11 +1161,17 @@ static void pflash_cfi02_reset(DeviceState *dev)
 {
     PFlashCFI02 *pfl = PFLASH_CFI02(dev);
 
+    if (pfl->cmd == 0x25) {
+        timer_del(&pfl->timer);
+        pfl->status &= ~0x02;
+    }
     pflash_reset_state_machine(pfl);
 }
 
 static const Property pflash_cfi02_properties[] = {
     DEFINE_PROP_DRIVE("drive", PFlashCFI02, blk),
+    DEFINE_PROP_UINT32("write-buffer-size", PFlashCFI02,
+                       write_buffer_size, 0),
     DEFINE_PROP_UINT32("num-blocks", PFlashCFI02, uniform_nb_blocs, 0),
     DEFINE_PROP_UINT32("sector-length", PFlashCFI02, uniform_sector_len, 0),
     DEFINE_PROP_UINT32("num-blocks0", PFlashCFI02, nb_blocs[0], 0),
