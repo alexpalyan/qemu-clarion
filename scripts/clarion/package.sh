@@ -163,7 +163,7 @@ bundle_linux() {
     for file in "$root"/libexec/*; do
         patchelf --set-rpath '$ORIGIN/../lib' "$file"
     done
-    for file in "${libs[@]}"; do
+    for file in "${libs[@]}" "$root/lib/libclarion-dbgprint.so"; do
         patchelf --set-rpath '$ORIGIN' "$file"
     done
 }

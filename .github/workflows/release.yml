@@ -81,8 +81,15 @@ jobs:
               exit 1
             fi
           else
-            ldd libexec/* lib/libclarion-dbgprint.so | grep -v "$PWD" | grep '=> /' | grep -vE 'lib(c|m|dl|pthread|rt|util|resolv)\.so' && exit 1
-            true
+            leak=0
+            for f in qemu-clarion libexec/* lib/libclarion-dbgprint.so; do
+              if ldd "$f" | grep -v "$PWD" | grep '=> /' |
+                  grep -vE 'lib(c|m|dl|pthread|rt|util|resolv)\.so'; then
+                echo "^ resolved outside the package: $f"
+                leak=1
+              fi
+            done
+            [ $leak = 0 ]
           fi
 
       - uses: actions/upload-artifact@v4
