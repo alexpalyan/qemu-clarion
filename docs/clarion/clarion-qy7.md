@@ -163,3 +163,13 @@ exports have fixed virtual addresses, so no runtime module-load adjustment is
 needed. For manual use, `-plugin PATH,image=NOR[,image=SD],out=FILE` performs
 the same scan; `syms=FILE` remains available as a fallback for explicit
 address lists.
+
+## Updater exit and ACC-off
+
+The QY7 machine enables the companion micom's `qy7-power-cycle` behavior.
+After the updater's YES path, the observed guest sends the micom frame
+`11 0d 00 01 00 00 40 20` following `POW >> Acc Off Notify SystemEXE!!!`
+at guest runtime address `0x039d572c` (`PowerMonitor.dll` POW path). The
+micom ACKs the frame and requests a system reset, modeling the supply cycling
+while vehicle ACC remains on. This is an exact-frame QY7 behavior; other micom
+frames and QY8 remain unchanged.
