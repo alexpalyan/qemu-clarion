@@ -1602,32 +1602,24 @@ static void qy8_int2_line_init(MemoryRegion *sysmem, Qy8Int2Line *l,
 #define TYPE_QY8_MACHINE MACHINE_TYPE_NAME("clarion-qy8")
 OBJECT_DECLARE_SIMPLE_TYPE(Qy8MachineState, QY8_MACHINE)
 
+/*
+ * Boards are told apart by the firmware build, not by the unit model: a
+ * build is made for one board. The NK2 image header names it, e.g.
+ * "G214ELNI.066". G214 builds are for the older board with a TMA616 touch
+ * controller (2014-2017 Leaf, e-NV200); G218 builds are for the ZE1 board
+ * with a TMA460. Other board differences go into the same table.
+ */
+#define QY8_NK2_BUILD_OFFSET 0xac0016
+#define QY8_NK2_BUILD_LEN 12
+
 typedef struct Qy8BoardProperties {
-    const char *name;
+    const char *name;           /* board= value, build prefix in lower case */
     bool tma616;
 } Qy8BoardProperties;
 
 static const Qy8BoardProperties qy8_board_properties[] = {
-    { "qy8652nb", false },
-    { "qy8202na", true },
-    { "qy8602nb", false },
-    { "qy8600ne", false },
-    { "qy8202pb", true },
-    { "qy8202nc", true },
-    { "qy8252nf", true },
-};
-
-/*
- * The NK2 image header names the firmware build, e.g. "G214ELNI.066". G214
- * builds are for the older board with a TMA616 touch controller (QY82xx:
- * 2014-2017 Leaf, e-NV200); G218 builds are for the ZE1 board with a TMA460.
- * A unit missing from the table above takes its board from this name.
- */
-#define QY8_NK2_BUILD_OFFSET 0xac0016
-
-static const Qy8BoardProperties qy8_firmware_boards[] = {
-    { "G214", true },
-    { "G218", false },
+    { "g214", true },
+    { "g218", false },
 };
 
 struct Qy8MachineState {
@@ -1679,9 +1671,8 @@ struct Qy8MachineState {
     bool tma460_on;             /* opt-in bounded TMA460 model */
     bool tma460_synthetic_profile_on; /* opt-in synthetic profile */
     bool i2c_empty_on;          /* opt-in: I2C0..I2C2 with empty buses */
-    char *board;                /* property value: "auto" or canonical name */
-    const ClarionBoardInfo *board_info; /* resolved in qy8_init() */
-    const Qy8BoardProperties *board_properties;
+    char *board;                /* property value: "auto", "g214" or "g218" */
+    const Qy8BoardProperties *board_properties; /* resolved in qy8_init() */
     bool reverse;               /* RV input, machine property */
     bool g2d_on;
     bool shcore_on;
@@ -1750,48 +1741,15 @@ static void qy8_usb_irq(void *opaque, int n, int level)
                  s->int2_usb.pending != 0);
 }
 
-/*
- * Boards are named after the unit model, not after the car: one car
- * generation was fitted with units of more than one family.  The model is
- * stored in the NOR image, in a block that starts with "PROD": 8 ASCII
- * characters at +0x40.  The block is not at the same place in every unit
- * family, so a short list of offsets is probed.
- */
-static const ClarionBoardInfo *qy8_board_by_name(const char *name)
-{
-    for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
-        if (!g_strcmp0(name, clarion_boards[i].name)) {
-            return clarion_boards[i].target &&
-                   !strcmp(clarion_boards[i].target, "arm") ?
-                   &clarion_boards[i] : NULL;
-        }
-    }
-    return NULL;
-}
-
 static const Qy8BoardProperties *qy8_properties_by_name(const char *name)
 {
     for (int i = 0; i < ARRAY_SIZE(qy8_board_properties); i++) {
-        if (!strcmp(name, qy8_board_properties[i].name)) {
+        if (!g_ascii_strncasecmp(name, qy8_board_properties[i].name,
+                                 strlen(qy8_board_properties[i].name))) {
             return &qy8_board_properties[i];
         }
     }
     return NULL;
-}
-
-static const ClarionBoardInfo *qy8_board_by_model(const char *model)
-{
-    int untested;
-    const ClarionBoardInfo *board = clarion_board_find(model, &untested);
-
-    if (!board || strcmp(board->target, "arm")) {
-        return NULL;
-    }
-    if (untested) {
-        warn_report("clarion-qy8: unit model %s has not been tested",
-                    model);
-    }
-    return board;
 }
 
 /* Read from the flash image before any device is built on top of it */
@@ -1850,85 +1808,54 @@ static bool qy8_flash_model(MachineState *machine, hwaddr *prod_offset,
     return false;
 }
 
+/* Printable copy of @len bytes from @src */
+static void qy8_printable(char *dst, const uint8_t *src, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        dst[i] = g_ascii_isgraph(src[i]) ? src[i] : '.';
+    }
+    dst[len] = '\0';
+}
+
 static void qy8_resolve_board(Qy8MachineState *s, MachineState *machine)
 {
-    static const char hint[] = "choose one with "
-        "board=qy8652nb|qy8602nb|qy8600ne|qy8202na|qy8202pb|qy8202nc|"
-        "qy8252nf";
-    const ClarionBoardInfo *detected = NULL;
+    static const char hint[] = "choose the board with board=g214|g218";
     char model[CLARION_PROD_MODEL_LEN + 1] = "";
+    char build[QY8_NK2_BUILD_LEN + 1] = "";
+    uint8_t raw[QY8_NK2_BUILD_LEN];
     uint8_t first[4] = { 0 };
-    bool is_auto = !strcmp(s->board, "auto");
     hwaddr prod = 0;
-    bool found;
 
     if (!drive_get(IF_PFLASH, 0, 0) && !machine->firmware) {
         return;                 /* qy8_init() reports the missing image */
     }
 
-    found = qy8_flash_model(machine, &prod, model, first);
-    if (found) {
-        detected = qy8_board_by_model(model);
-    }
-
-    if (!is_auto) {
-        s->board_info = qy8_board_by_name(s->board);
-        if (found && detected != s->board_info) {
-            warn_report("clarion-qy8: board=%s does not match unit model "
-                        "%s in the flash image", s->board, model);
-        }
-    } else if (!found) {
-        error_report("clarion-qy8: no PROD block in the flash image "
-                     "(%02x %02x %02x %02x at 0x%" HWADDR_PRIx "); %s",
-                     first[0], first[1], first[2], first[3],
-                     clarion_prod_offsets[0], hint);
-        exit(1);
-    } else if (g_str_has_prefix(model, "QY7")) {
+    if (qy8_flash_model(machine, &prod, model, first) &&
+        g_str_has_prefix(model, "QY7")) {
         error_report("clarion-qy8: unit model %s is a QY7-series unit "
                      "(SH-4); this machine does not support it", model);
         exit(1);
-    } else if (!detected) {
-        error_report("clarion-qy8: unknown unit model \"%s\" in the PROD "
-                     "block at 0x%" HWADDR_PRIx "; %s", model, prod, hint);
-        exit(1);
-    } else {
-        s->board_info = detected;
+    }
+    if (qy8_flash_peek(machine, QY8_NK2_BUILD_OFFSET, raw, sizeof(raw))) {
+        qy8_printable(build, raw, sizeof(raw));
     }
 
-    if (found) {
-        info_report("clarion-qy8: unit model %s (PROD block at 0x%"
-                    HWADDR_PRIx "), board %s (%s)", model, prod,
-                    s->board_info->name, is_auto ? "auto" : "set explicitly");
+    if (strcmp(s->board, "auto")) {
+        s->board_properties = qy8_properties_by_name(s->board);
     } else {
-        info_report("clarion-qy8: no PROD block in the flash image, "
-                    "board %s (set explicitly)", s->board_info->name);
-    }
-    s->board_properties = qy8_properties_by_name(s->board_info->name);
-    if (!s->board_properties) {
-        char build[13] = "";
-
-        if (qy8_flash_peek(machine, QY8_NK2_BUILD_OFFSET, (uint8_t *)build,
-                           sizeof(build) - 1)) {
-            for (int i = 0; i < ARRAY_SIZE(qy8_firmware_boards); i++) {
-                if (!strncmp(build, qy8_firmware_boards[i].name, 4)) {
-                    s->board_properties = &qy8_firmware_boards[i];
-                }
-            }
-        }
-        for (int i = 0; i < sizeof(build) - 1; i++) {
-            if (!g_ascii_isgraph(build[i])) {
-                build[i] = '.';
-            }
-        }
-        if (s->board_properties) {
-            info_report("clarion-qy8: firmware %s, %s touch controller",
-                        build, s->board_properties->tma616 ? "TMA616" :
-                        "TMA460");
-        } else {
-            warn_report("clarion-qy8: firmware build \"%s\" not recognised; "
-                        "using the TMA460 touch controller", build);
+        s->board_properties = qy8_properties_by_name(build);
+        if (!s->board_properties) {
+            error_report("clarion-qy8: firmware build \"%s\" at NOR 0x%x "
+                         "is not known; %s", build, QY8_NK2_BUILD_OFFSET,
+                         hint);
+            exit(1);
         }
     }
+    info_report("clarion-qy8: unit model %s, firmware %s, board %s (%s), "
+                "%s touch controller", model[0] ? model : "unknown", build,
+                s->board_properties->name,
+                strcmp(s->board, "auto") ? "set explicitly" : "auto",
+                s->board_properties->tma616 ? "TMA616" : "TMA460");
 }
 
 static bool qy8_has_tma616(Qy8MachineState *s)
@@ -2696,9 +2623,9 @@ static void qy8_board_set(Object *obj, const char *value, Error **errp)
 {
     Qy8MachineState *s = QY8_MACHINE(obj);
 
-    if (g_strcmp0(value, "auto") && !qy8_board_by_name(value)) {
-        error_setg(errp, "board must be auto, qy8652nb, qy8602nb, "
-                   "qy8600ne, qy8202na, qy8202pb, qy8202nc or qy8252nf");
+    if (g_strcmp0(value, "auto") && (strlen(value) != 4 ||
+                                     !qy8_properties_by_name(value))) {
+        error_setg(errp, "board must be auto, g214 or g218");
         return;
     }
     g_free(s->board);
@@ -2980,9 +2907,9 @@ static void qy8_machine_instance_init(Object *obj)
     s->board = g_strdup("auto");
     object_property_add_str(obj, "board", qy8_board_get, qy8_board_set);
     object_property_set_description(obj, "board",
-        "board peripherals by unit model: auto (default, read from the "
-        "flash image), qy8652nb, qy8602nb, qy8600ne, qy8202na, "
-        "qy8202pb, qy8202nc or qy8252nf");
+        "board peripherals by firmware build: auto (default, read from "
+        "the NK2 image header), g214 (older board, TMA616 touch) or g218 "
+        "(ZE1 board, TMA460 touch)");
 
     s->dipsw = QY8_DIPSW_NORM_RES;
     object_property_add_uint8_ptr(obj, "dipsw", &s->dipsw,
@@ -3049,7 +2976,7 @@ static void qy8_machine_instance_init(Object *obj)
                              qy8_tma460_set);
     object_property_set_description(obj, "tma460",
         "Bounded TMA460 bootloader model at I2C4 address 0x24 (on by default; requires i2c4=on); "
-        "TMA616 at 0x67 with board=qy8202na");
+        "TMA616 at 0x67 with board=g214");
 
     s->tma460_synthetic_profile_on = true;
     object_property_add_bool(obj, "tma460-profile",

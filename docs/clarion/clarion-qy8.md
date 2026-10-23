@@ -50,7 +50,7 @@ the same command line is merged with the first.
 | Property | Default | Purpose |
 |---|---|---|
 | `dipsw` | `5` | value of the board DIP switches, 0..7 |
-| `board` | `auto` | board peripherals by unit model: `auto`, `qy8652nb`, `qy8602nb`, `qy8600ne`, `qy8202na`, `qy8202pb` (see below) |
+| `board` | `auto` | board peripherals by firmware build: `auto`, `g214`, `g218` (see below) |
 | `micom` | `on` | built-in companion MCU on SCIF4; `off` lets you attach your own responder via `-serial` |
 | `dispmicom` | `on` | built-in display panel MCU on SCIF1; `off` works the same way |
 | `gps` | `on` | built-in u-blox GNSS receiver on SCIF2; `off` leaves SCIF2 on `-serial` index 3 |
@@ -66,31 +66,28 @@ the same command line is merged with the first.
 | `i2c-empty` | `off` | I2C0..I2C2 as empty buses: an immediate NACK instead of a bus timeout |
 | `i2c4` | `on` | Bounded I2C4 controller model at `0xffc73000` (the touchscreen bus) |
 | `i2c4-recorder` | `off` | transaction recorder on I2C4, address `0x24` |
-| `tma460` | `on` | TMA460 touchscreen controller model on I2C4 (requires `i2c4=on`); on the `qy8202na` and `qy8202pb` boards a TMA616 at `0x67` instead |
+| `tma460` | `on` | TMA460 touchscreen controller model on I2C4 (requires `i2c4=on`); on the `g214` board a TMA616 at `0x67` instead |
 | `tma460-profile` | `on` | Synthetic TMA460 register profile with pointer-to-touch input |
 
 ### Board selection
 
-Boards are named after the full unit model; the vehicle generation does not
-identify the head unit unambiguously. With `board=auto` the machine reads the
-model from the flash image, from the block that starts with `PROD` (8 ASCII
-characters at `+0x40` of the block), and prints one line at start-up:
+A firmware build is made for one board, so the board is chosen from the
+build named in the NK2 image header (12 ASCII characters at NOR
+`0xAC0016`), not from the unit model. With `board=auto` the machine prints
+one line at start-up:
 
 ```
-clarion-qy8: unit model QY8202NA (PROD block at 0x40000), board qy8202na (auto)
+clarion-qy8: unit model QY8252NF, firmware G214ELNI.112, board g214 (auto), TMA616 touch controller
 ```
 
-| Unit model | `board` | Touch controller | Notes |
+| Firmware build | `board` | Touch controller | Units seen |
 |---|---|---|---|
-| `QY8652NB` | `qy8652nb` | TMA460 at `0x24` | found in the 2018+ Leaf (ZE1) |
-| `QY8602NB` | `qy8602nb` | TMA460 at `0x24` | found in the 2018+ Leaf (ZE1), European market |
-| `QY8600NE` | `qy8600ne` | TMA460 at `0x24` | found in the 2018+ Leaf (ZE1), US market |
-| `QY8202NA` | `qy8202na` | TMA616 at `0x67` | found in the 2014-2017 Leaf (ZE0) |
-| `QY8202PB` | `qy8202pb` | TMA616 at `0x67` | found in the e-NV200 (ME0) |
+| `G214…` | `g214` | TMA616 at `0x67` | QY8202NA, QY8202NC, QY8252NF (2014-2017 Leaf), QY8202PB (e-NV200) |
+| `G218…` | `g218` | TMA460 at `0x24` | QY8652NB, QY8602NB, QY8600NE (2018+ Leaf, ZE1) |
 
-With `auto`, an image without a `PROD` block or with an unknown model is
-an error; name the board explicitly to run it anyway. An explicit board
-that does not match the model in the image only gives a warning. A
+With `auto`, an image whose NK2 header names no known build is an error;
+name the board explicitly to run it anyway (for example a damaged or erased
+NK2 image). The unit model from the `PROD` block is only reported. A
 QY7-series unit (SH-4) is rejected: this machine does not model it.
 
 A typical configuration with touch:
