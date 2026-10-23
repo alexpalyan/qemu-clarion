@@ -111,14 +111,16 @@ starts QEMU. You never pass ``-M`` or ``-drive`` yourself.
 
 .. code-block:: shell
 
-  qemu-clarion [-n] [--read-only] [--headless] [--dbgprint FILE] NOR [SD] [QEMU arguments...]
+  qemu-clarion [-n] [--writable] [--headless] [--log FILE] [--dbgprint FILE] NOR [SD] [QEMU arguments...]
+  qemu-clarion --help
 
 .. code-block:: shell
 
   build-release/qemu-clarion flash.bin                          # NOR only
   build-release/qemu-clarion flash.bin map-card.img             # NOR and SD card
-  build-release/qemu-clarion --read-only flash.bin map-card.img # leave both files untouched
+  build-release/qemu-clarion --writable flash.bin map-card.img  # write both files in place
   build-release/qemu-clarion --headless flash.bin               # no window
+  build-release/qemu-clarion --log run.log flash.bin             # launcher and engine output to one file
   build-release/qemu-clarion --dbgprint guest.log flash.bin     # capture guest debug output
   build-release/qemu-clarion -n flash.bin map-card.img          # print the QEMU command and exit
 
@@ -133,22 +135,27 @@ starts QEMU. You never pass ``-M`` or ``-drive`` yourself.
    * - ``SD``
      - optional raw image of the SD card for the front slot, including
        QY7221NL (SDHI0)
-   * - ``--read-only``
-     - open both images with ``snapshot=on``: guest writes go to temporary
-       storage and the files do not change
+   * - ``--writable``
+     - write to NOR and SD in place (default: ``snapshot=on``, an
+       in-memory overlay discarded on exit)
    * - ``--headless``
      - run without a display window (``-nographic``)
+   * - ``--log FILE``
+     - send the launcher's and the engine's stdout/stderr to FILE
    * - ``--dbgprint FILE``
      - record Windows CE debug output in FILE using the bundled plugin
    * - ``-n``
      - print the command line that would be run
    * - anything after the images
-     - passed to QEMU unchanged, for example ``-machine dipsw=1``
+     - passed to QEMU unchanged, for example ``-machine dipsw=1``; a
+       passed-through ``-M`` replaces the one the launcher picked, so
+       board properties (for example ``gps=off``) can be set too
 
-**By default the guest writes to the images you pass**, as the real unit
-writes to its flash and card, and those changes survive a restart. Work on
-copies, or use ``--read-only``. Without ``--read-only`` the launcher refuses
-an image it cannot write to.
+**By default both images are opened read-only** (``snapshot=on``): guest
+writes go to an in-memory overlay and the files do not change. Pass
+``--writable`` to write to them in place, as the real unit writes to its
+flash and card. Without ``--writable`` the launcher does not touch either
+file's permissions; with it, it refuses an image it cannot write to.
 
 What the launcher sets up unless you override it:
 
@@ -165,8 +172,8 @@ What the launcher sets up unless you override it:
 The QY8 screen is not immediate: the consent screen appears after roughly
 45 to 100 seconds, depending on the host.
 
-Machine properties go in a ``-machine name=value`` argument and merge with
-the machine the launcher selected. ``dipsw`` selects the boot mode on every
+Machine properties go in a ``-machine name=value`` argument, which replaces
+the one the launcher would otherwise have picked. ``dipsw`` selects the boot mode on every
 machine (``dipsw=1`` adds a step-by-step boot log on QY8). The
 ``clarion-qy8`` properties, serial port layout, pointer input, diagnostics
 and the MIRROR renderer are described in

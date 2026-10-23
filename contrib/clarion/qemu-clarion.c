@@ -1,6 +1,8 @@
 #include "config-host.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <glib.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,13 +42,59 @@ static gboolean read_model(const char *path,
     return FALSE;
 }
 
+/*
+ * Every refusal to launch goes through here so a caller can grep one string
+ * ("qemu-clarion: refused:") instead of matching each message by hand.
+ */
+static int refuse(const char *fmt, ...)
+{
+    va_list ap;
+
+    fprintf(stderr, "qemu-clarion: refused: ");
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+    return 1;
+}
+
 static void usage(const char *program)
 {
     fprintf(stderr,
-            "usage: %s [-n] [--read-only] [--headless] "
-            "[--dbgprint FILE] NOR [SD] "
-            "[QEMU arguments...]\n",
-            program);
+            "usage: %s [-n] [--writable] [--headless] [--log FILE] "
+            "[--dbgprint FILE] NOR [SD] [QEMU arguments...]\n"
+            "       %s --help\n",
+            program, program);
+}
+
+static void help(const char *program)
+{
+    usage(program);
+    fprintf(stderr,
+            "\n"
+            "  NOR            flash dump to boot; its PROD block picks the board\n"
+            "  SD             SD card image, if the board has a slot\n"
+            "  -n             print the resolved qemu-system-* command line, don't run it\n"
+            "  --writable     write NOR and SD in place (default: snapshot=on,\n"
+            "                 an in-memory overlay discarded on exit)\n"
+            "  --headless     -nographic instead of a display window\n"
+            "  --log FILE     send this process's stdout and stderr, and so the\n"
+            "                 emulator's, to FILE instead of the console\n"
+            "  --dbgprint FILE  capture guest debug output to FILE\n"
+            "  --help         this text\n"
+            "\n"
+            "Anything else is passed straight to qemu-system-*. A passed-through\n"
+            "-M replaces the board's own (so board properties, e.g. gps=off,\n"
+            "can be set); -serial/-display/-nographic/-icount are likewise left\n"
+            "alone if already given.\n"
+            "\n"
+            "Before the engine runs, this prints one status line to stdout:\n"
+            "  qemu-clarion: ready             NOR and SD are readable, a board was\n"
+            "                                   found, about to hand off to the engine\n"
+            "  qemu-clarion: refused: REASON   on stderr, nothing was run\n"
+            "There is no status line for the engine exiting: once the handoff\n"
+            "happens this process becomes qemu-system-*, so the caller's own\n"
+            "wait() on it carries that exit code, same as running it directly.\n");
 }
 
 static char *find_dbgprint_plugin(const char *directory)
@@ -72,7 +120,7 @@ static char *find_dbgprint_plugin(const char *directory)
 }
 
 static char *drive_argument(const char *path, const char *interface,
-                            gboolean read_only)
+                            gboolean writable)
 {
     GString *drive = g_string_new(NULL);
 
@@ -87,7 +135,7 @@ static char *drive_argument(const char *path, const char *interface,
             g_string_append_c(drive, ',');
         }
     }
-    if (read_only) {
+    if (!writable) {
         g_string_append(drive, ",snapshot=on");
     }
     return g_string_free(drive, FALSE);
@@ -114,22 +162,45 @@ static gboolean has_argument(int argc, char **argv, const char *name)
     return FALSE;
 }
 
-static gboolean check_writable(const char *path, gboolean read_only)
+static gboolean check_writable(const char *path)
 {
-    if (!read_only && access(path, W_OK)) {
-        fprintf(stderr, "qemu-clarion: %s is not writable; use --read-only\n",
+    if (access(path, W_OK)) {
+        fprintf(stderr,
+                "qemu-clarion: refused: %s is not writable; drop --writable "
+                "to use the default read-only overlay\n",
                 path);
         return FALSE;
     }
     return TRUE;
 }
 
+/* --log opens FILE once and dups it onto both streams, so the launcher's own
+ * status lines and the emulator's stdio land in one file in the order they
+ * were written. Two independent freopen()s would race for the same offset. */
+static gboolean redirect_log(const char *path)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if (fd < 0) {
+        fprintf(stderr, "qemu-clarion: refused: cannot open log %s: %s\n",
+                path, strerror(errno));
+        return FALSE;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    close(fd);
+    return TRUE;
+}
+
 int main(int argc, char **argv)
 {
     gboolean dry_run = FALSE;
-    gboolean read_only = FALSE;
+    gboolean writable = FALSE;
     gboolean headless = FALSE;
     const char *dbgprint = NULL;
+    const char *log_path = NULL;
     int first_arg = 1;
     const char *flash;
     const char *sd = NULL;
@@ -146,16 +217,25 @@ int main(int argc, char **argv)
     while (first_arg < argc) {
         if (!strcmp(argv[first_arg], "-n")) {
             dry_run = TRUE;
-        } else if (!strcmp(argv[first_arg], "--read-only")) {
-            read_only = TRUE;
+        } else if (!strcmp(argv[first_arg], "--writable")) {
+            writable = TRUE;
         } else if (!strcmp(argv[first_arg], "--headless")) {
             headless = TRUE;
+        } else if (!strcmp(argv[first_arg], "--log")) {
+            if (first_arg + 1 >= argc) {
+                usage(argv[0]);
+                return 2;
+            }
+            log_path = argv[++first_arg];
         } else if (!strcmp(argv[first_arg], "--dbgprint")) {
             if (first_arg + 1 >= argc) {
                 usage(argv[0]);
                 return 2;
             }
             dbgprint = argv[++first_arg];
+        } else if (!strcmp(argv[first_arg], "--help")) {
+            help(argv[0]);
+            return 0;
         } else {
             break;
         }
@@ -165,17 +245,20 @@ int main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+    if (log_path && !redirect_log(log_path)) {
+        return 1;
+    }
     flash = argv[first_arg++];
     if (first_arg < argc && argv[first_arg][0] != '-') {
         sd = argv[first_arg++];
     }
     if (!read_model(flash, model)) {
-        fprintf(stderr, "qemu-clarion: no PROD block in %s\n", flash);
-        return 1;
+        return refuse("no PROD block in %s", flash);
     }
     board = clarion_board_find(model, &untested);
     if (!board) {
-        fprintf(stderr, "qemu-clarion: unknown model %s; supported: ", model);
+        fprintf(stderr, "qemu-clarion: refused: unknown model %s; supported: ",
+                model);
         for (size_t i = 0; i < G_N_ELEMENTS(clarion_boards); i++) {
             fprintf(stderr, "%s%s", i ? ", " : "", clarion_boards[i].model);
         }
@@ -187,12 +270,12 @@ int main(int argc, char **argv)
                 "using the %s machine\n", model, board->machine);
     }
     if (sd && !board->has_sd) {
-        fprintf(stderr, "qemu-clarion: %s does not support an SD card\n",
-                model);
-        return 1;
+        return refuse("%s does not support an SD card", model);
     }
-    if (!check_writable(flash, read_only) ||
-        (sd && !check_writable(sd, read_only))) {
+    /* snapshot=on (the default) needs no write access, so only check it
+     * when a write was actually asked for. */
+    if (writable &&
+        (!check_writable(flash) || (sd && !check_writable(sd)))) {
         return 1;
     }
 
@@ -211,13 +294,17 @@ int main(int argc, char **argv)
     }
     args = g_new0(char *, argc + 14);
     args[arg_count++] = emulator;
-    args[arg_count++] = (char *)"-M";
-    args[arg_count++] = (char *)board->machine;
+    /* A caller who already knows the machine string they want (board
+     * properties included) gets to use it, same as -serial/-display below. */
+    if (!has_argument(argc - first_arg, argv + first_arg, "-M")) {
+        args[arg_count++] = (char *)"-M";
+        args[arg_count++] = (char *)board->machine;
+    }
     args[arg_count++] = (char *)"-drive";
-    args[arg_count++] = drive_argument(flash, "pflash", read_only);
+    args[arg_count++] = drive_argument(flash, "pflash", writable);
     if (sd) {
         args[arg_count++] = (char *)"-drive";
-        args[arg_count++] = drive_argument(sd, "sd", read_only);
+        args[arg_count++] = drive_argument(sd, "sd", writable);
     }
     user_console = has_console_argument(argc - first_arg, argv + first_arg);
     if (!user_console) {
@@ -269,8 +356,10 @@ int main(int argc, char **argv)
         putchar('\n');
         return 0;
     }
+    fputs("qemu-clarion: ready\n", stdout);
+    fflush(stdout);
     execv(emulator, args);
-    fprintf(stderr, "qemu-clarion: cannot execute %s: %s\n", emulator,
+    fprintf(stderr, "qemu-clarion: refused: cannot execute %s: %s\n", emulator,
             strerror(errno));
     return 1;
 }
