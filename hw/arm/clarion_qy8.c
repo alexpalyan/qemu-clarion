@@ -1613,6 +1613,21 @@ static const Qy8BoardProperties qy8_board_properties[] = {
     { "qy8602nb", false },
     { "qy8600ne", false },
     { "qy8202pb", true },
+    { "qy8202nc", true },
+    { "qy8252nf", true },
+};
+
+/*
+ * The NK2 image header names the firmware build, e.g. "G214ELNI.066". G214
+ * builds are for the older board with a TMA616 touch controller (QY82xx:
+ * 2014-2017 Leaf, e-NV200); G218 builds are for the ZE1 board with a TMA460.
+ * A unit missing from the table above takes its board from this name.
+ */
+#define QY8_NK2_BUILD_OFFSET 0xac0016
+
+static const Qy8BoardProperties qy8_firmware_boards[] = {
+    { "G214", true },
+    { "G218", false },
 };
 
 struct Qy8MachineState {
@@ -1773,8 +1788,8 @@ static const ClarionBoardInfo *qy8_board_by_model(const char *model)
         return NULL;
     }
     if (untested) {
-        warn_report("clarion-qy8: unit model %s has not been tested; "
-                    "using board defaults", model);
+        warn_report("clarion-qy8: unit model %s has not been tested",
+                    model);
     }
     return board;
 }
@@ -1838,7 +1853,8 @@ static bool qy8_flash_model(MachineState *machine, hwaddr *prod_offset,
 static void qy8_resolve_board(Qy8MachineState *s, MachineState *machine)
 {
     static const char hint[] = "choose one with "
-        "board=qy8652nb|qy8602nb|qy8600ne|qy8202na|qy8202pb";
+        "board=qy8652nb|qy8602nb|qy8600ne|qy8202na|qy8202pb|qy8202nc|"
+        "qy8252nf";
     const ClarionBoardInfo *detected = NULL;
     char model[CLARION_PROD_MODEL_LEN + 1] = "";
     uint8_t first[4] = { 0 };
@@ -1888,6 +1904,31 @@ static void qy8_resolve_board(Qy8MachineState *s, MachineState *machine)
                     "board %s (set explicitly)", s->board_info->name);
     }
     s->board_properties = qy8_properties_by_name(s->board_info->name);
+    if (!s->board_properties) {
+        char build[13] = "";
+
+        if (qy8_flash_peek(machine, QY8_NK2_BUILD_OFFSET, (uint8_t *)build,
+                           sizeof(build) - 1)) {
+            for (int i = 0; i < ARRAY_SIZE(qy8_firmware_boards); i++) {
+                if (!strncmp(build, qy8_firmware_boards[i].name, 4)) {
+                    s->board_properties = &qy8_firmware_boards[i];
+                }
+            }
+        }
+        for (int i = 0; i < sizeof(build) - 1; i++) {
+            if (!g_ascii_isgraph(build[i])) {
+                build[i] = '.';
+            }
+        }
+        if (s->board_properties) {
+            info_report("clarion-qy8: firmware %s, %s touch controller",
+                        build, s->board_properties->tma616 ? "TMA616" :
+                        "TMA460");
+        } else {
+            warn_report("clarion-qy8: firmware build \"%s\" not recognised; "
+                        "using the TMA460 touch controller", build);
+        }
+    }
 }
 
 static bool qy8_has_tma616(Qy8MachineState *s)
@@ -2657,7 +2698,7 @@ static void qy8_board_set(Object *obj, const char *value, Error **errp)
 
     if (g_strcmp0(value, "auto") && !qy8_board_by_name(value)) {
         error_setg(errp, "board must be auto, qy8652nb, qy8602nb, "
-                   "qy8600ne, qy8202na or qy8202pb");
+                   "qy8600ne, qy8202na, qy8202pb, qy8202nc or qy8252nf");
         return;
     }
     g_free(s->board);
@@ -2940,8 +2981,8 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_add_str(obj, "board", qy8_board_get, qy8_board_set);
     object_property_set_description(obj, "board",
         "board peripherals by unit model: auto (default, read from the "
-        "flash image), qy8652nb, qy8602nb, qy8600ne, qy8202na "
-        "or qy8202pb");
+        "flash image), qy8652nb, qy8602nb, qy8600ne, qy8202na, "
+        "qy8202pb, qy8202nc or qy8252nf");
 
     s->dipsw = QY8_DIPSW_NORM_RES;
     object_property_add_uint8_ptr(obj, "dipsw", &s->dipsw,
