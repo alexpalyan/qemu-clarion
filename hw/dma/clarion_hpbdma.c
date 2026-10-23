@@ -159,6 +159,10 @@ struct ClarionHpbDmaState {
     unsigned n_module;
     bool servicing;                     /* re-entry guard */
     bool qy7_mode;
+    /* channels already reported, so a log line comes once per channel */
+    uint64_t port_widths_logged;
+    uint64_t no_binding_logged;
+    uint64_t no_irq_line_logged;
 };
 
 OBJECT_DECLARE_SIMPLE_TYPE(ClarionHpbDmaState, CLARION_HPBDMA)
@@ -200,7 +204,8 @@ static int hpb_chan_irq_line(ClarionHpbDmaState *s, int ch)
     if (ch == 16 || ch == 17) {
         return 2;                       /* IRQ 125, HSCIF0; see above */
     }
-    if (ch != 4 && ch != 6) {
+    if (ch != 4 && ch != 6 && !(s->no_irq_line_logged & BIT_ULL(ch))) {
+        s->no_irq_line_logged |= BIT_ULL(ch);
         qemu_log_mask(LOG_UNIMP,
                       "clarion-hpbdma: channel %d has no interrupt line in "
                       "available sources; using the lowest line\n", ch);
@@ -321,7 +326,8 @@ static unsigned hpb_unit(ClarionHpbDmaState *s, int ch)
     unsigned spds = (dcr & DCR_SPDS_MASK) >> DCR_SPDS_SHIFT;
     unsigned dpds = (dcr & DCR_DPDS_MASK) >> DCR_DPDS_SHIFT;
 
-    if (spds != dpds) {
+    if (spds != dpds && !(s->port_widths_logged & BIT_ULL(ch))) {
+        s->port_widths_logged |= BIT_ULL(ch);
         qemu_log_mask(LOG_UNIMP,
                       "clarion-hpbdma: channel %d has different port widths "
                       "(SPDS=%u, DPDS=%u); using the larger\n", ch, spds, dpds);
@@ -368,7 +374,9 @@ static void hpb_move_one(ClarionHpbDmaState *s, int ch)
     if (qy7_scif1_tx) {
         dst = mod;
     }
-    if ((c->dcr & (DCR_SMDL | DCR_DMDL)) && mod == HPB_NO_MODULE) {
+    if ((c->dcr & (DCR_SMDL | DCR_DMDL)) && mod == HPB_NO_MODULE &&
+        !(s->no_binding_logged & BIT_ULL(ch))) {
+        s->no_binding_logged |= BIT_ULL(ch);
         qemu_log_mask(LOG_UNIMP, "clarion-hpbdma: channel %d accesses a module "
                       "with no known binding; using register address\n", ch);
     }
