@@ -1023,8 +1023,12 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
             int u = a5 >> 16, d = a5 & 0xffff;
             int cx, cy;
 
-            /* Other ROPs and header flag combinations are unestablished. */
-            if (w != 0xa1002900 || a1 != 0xcc ||
+            /*
+             * AppLaunch.dll emits this seven-word form at 0x03e511f8.
+             * Its caller selects 0x3900 when context +0x4c is nonzero
+             * (0x03e50a80..0x03e50a90); other flag combinations are unknown.
+             */
+            if ((w != 0xa1002900 && w != 0xa1003900) || a1 != 0xcc ||
                 !clarion_2dg_rd32(pc + 24, &a6)) {
                 goto unknown;
             }
