@@ -1,11 +1,12 @@
 # The `clarion-qy7` machine
 
 `clarion-qy7` models the QY7221NL SH-4A unit. The `qemu-clarion` launcher
-selects the machine from the NOR image and can keep both the NOR and SD card
-unchanged with `--read-only`:
+selects the machine from the NOR image and, by default, keeps both the NOR
+and SD card unchanged (`snapshot=on`; add `--writable` to write them in
+place):
 
 ```sh
-build-release/qemu-clarion --read-only --headless qy7-nor.bin map-card.img \
+build-release/qemu-clarion --headless qy7-nor.bin map-card.img \
     -qmp unix:/tmp/qy7.sock,server=on,wait=off
 ```
 
@@ -155,7 +156,7 @@ register API. The plugin scans every kernel XIP region in NOR and SD itself;
 the SD card can contain multiple copies with different export addresses.
 
 ```sh
-build-release/qemu-clarion --read-only --dbgprint guest-debug.log NOR SD
+build-release/qemu-clarion --dbgprint guest-debug.log NOR SD
 ```
 
 The launcher finds the plugin in the release package or build tree. XIP

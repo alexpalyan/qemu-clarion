@@ -23,3 +23,4 @@ GTAGS
 *.patch
 *.gcov
 .DS_Store
+/contrib/clarion/macos-gui/AppIcon.icns

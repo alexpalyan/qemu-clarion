@@ -1,0 +1,6 @@
+# ~/.config/qy8boot/units - qy8boot's unit presets, not shipped with the repo.
+# unit variant card nand extra-flags ('-' = none). First variant per unit is the default.
+qy8202na iceland /path/to/ze0-iceland.img /path/to/nand_ze0_patched.bin -
+qy8202na stock /path/to/ze0-stock.img /path/to/nand_ze0_patched.bin -
+qy8602nb iceland /path/to/ze1-iceland.img /path/to/nand_ze1_patched.bin -m ze1
+qy8602nb stock /path/to/ze1-stock.img /path/to/nand_ze1_stock.bin -m ze1

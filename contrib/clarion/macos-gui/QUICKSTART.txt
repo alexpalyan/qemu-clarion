@@ -1,0 +1,31 @@
+QY8 Emulator: quick guide
+
+Start
+  1. Right-click QY8 Emulator.app, choose Open (first time only; macOS asks once).
+  2. Pick your card image (.img), then your NAND dump (.bin).
+  3. Wait about a minute for the Nissan logo, then the map or menu.
+
+Touch
+  Click the screen to tap. After about 10 taps on one screen the unit stops
+  responding: go back a screen and return, or use the keys below.
+
+Keys (click the window first)
+  F1        Menu
+  F2, Esc   Back
+  F3        Display off/on (hold 2-3 s)
+  F4        Map / current position
+  F5        Camera        F6   Audio
+  F7 / F8   Previous / next track
+  Enter     Select (TUNE knob push)
+  PageUp    Up in lists, zoom out on the map
+  PageDown  Down in lists, zoom in on the map
+  Wheel     Same as PageUp / PageDown
+  = / -     Volume up / down
+
+If something looks wrong
+  Black screen after the logos   Hold F3, or press F4.
+  "Touch OK to accept"           Click OK or press Enter.
+  "Navigation Launching Failed"  The card and NAND come from different units.
+
+Quit
+  Close the window. Your card image is never changed.

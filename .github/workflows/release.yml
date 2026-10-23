@@ -82,10 +82,21 @@ jobs:
             true
           fi
 
+      - name: Package macOS app (GUI)
+        if: runner.os == 'macOS'
+        run: QEMU_BUILD_DIR="$PWD/build-pkg" contrib/clarion/macos-gui/package-app.sh "$PWD/dist"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ runner.os }}-package
           path: dist/*.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: macos-app
+          path: dist/QY8-Emulator.zip
           if-no-files-found: error
 
   release:
@@ -106,4 +117,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
               gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip --clobber
