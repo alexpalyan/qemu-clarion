@@ -11,7 +11,7 @@
 #define CLARION_PROD_CARD_PWD_OFF 0x100
 #define CLARION_PROD_CARD_PWD_LEN 16
 
-/* Exit status shared by QY7 micom power-cycle and the launcher supervisor. */
+/* Exit status for a guest power cycle; the launcher restarts QEMU on it. */
 #define CLARION_POWER_CYCLE_EXIT_CODE 0xc7
 
 static const unsigned long long clarion_prod_offsets[] = { 0x40000, 0xa000 };

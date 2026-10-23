@@ -17,8 +17,8 @@ Usage:
 
 `--dbgprint FILE` records Windows CE debug output while the guest runs.
 
-The launcher supervises QEMU and restarts it after the QY7 micom power-cycle
-request. `--read-only` creates temporary qcow2 overlays for NOR and SD; those
+The launcher supervises QEMU and restarts it when the guest power-cycles the
+unit (QY7 releases its power hold, for example after leaving the updater). `--read-only` creates temporary qcow2 overlays for NOR and SD; those
 overlays persist across process restarts and are removed when the launcher
 session ends. Without the launcher, `qemu-system-sh4` exits with the shared
 power-cycle status code and does not restart itself.
