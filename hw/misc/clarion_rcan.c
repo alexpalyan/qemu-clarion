@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "qemu/osdep.h"
+#include "qemu/cutils.h"
+#include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "hw/misc/clarion_rcan.h"
@@ -49,7 +51,54 @@ struct ClarionRcan {
     uint16_t regs[RCAN_SIZE / sizeof(uint16_t)];
     bool reset_requested;
     bool halt_requested;
+    FILE *canlog;
+    GPtrArray *replay;
 };
+
+typedef struct RcanReplay {
+    ClarionRcan *s;
+    QEMUTimer *timer;
+    uint32_t period_ms;
+    uint16_t id;
+    uint8_t len;
+    uint8_t data[8];
+} RcanReplay;
+
+static void rcan_log(ClarionRcan *s, const char *fmt, ...)
+{
+    va_list ap;
+
+    if (!s->canlog) {
+        return;
+    }
+    fprintf(s->canlog, "guest_ms=%" PRId64 " ",
+            qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+    va_start(ap, fmt);
+    vfprintf(s->canlog, fmt, ap);
+    va_end(ap);
+    fputc('\n', s->canlog);
+    fflush(s->canlog);
+}
+
+static void rcan_log_frame(ClarionRcan *s, const char *direction,
+                           int mailbox, uint16_t id, const uint8_t *data,
+                           unsigned len)
+{
+    char hex[17];
+    unsigned data_len = MIN(len, 8);
+
+    for (unsigned i = 0; i < data_len; i++) {
+        snprintf(hex + i * 2, 3, "%02x", data[i]);
+    }
+    hex[data_len * 2] = '\0';
+    rcan_log(s, "direction=%s mailbox=%d id=0x%08x format=standard "
+             "dlc=%u data=%s", direction, mailbox, id, len, hex);
+}
+
+static const char *rcan_mode_name(bool reset, bool halt)
+{
+    return reset ? "reset" : halt ? "halt" : "operation";
+}
 
 static uint16_t *rcan_reg(ClarionRcan *s, hwaddr offset)
 {
@@ -151,6 +200,18 @@ static void rcan_start_transmit(ClarionRcan *s, uint32_t requested)
         if (s->reset_requested || s->halt_requested || config > 1) {
             continue;
         }
+        {
+            uint8_t data[8];
+            unsigned dlc = *rcan_reg(s, base + 0x10) & 0xf;
+            unsigned len = MIN(dlc, 8);
+
+            for (unsigned j = 0; j < len; j++) {
+                uint16_t word = *rcan_reg(s, base + 0x08 + (j & ~1u));
+
+                data[j] = (j & 1) ? word : word >> 8;
+            }
+            rcan_log_frame(s, "TX", i, rcan_mailbox_id(s, base), data, dlc);
+        }
         txack |= bit;
     }
     *rcan_reg(s, RCAN_TXACK0) = txack;
@@ -166,6 +227,7 @@ static void rcan_write_mcr(ClarionRcan *s, uint16_t value)
 
     bool old_reset = s->reset_requested;
     bool old_halt = s->halt_requested;
+    const char *old_mode = rcan_mode_name(old_reset, old_halt);
 
     if ((value & RCAN_MCR_RESET) && !old_reset) {
         rcan_reset_registers(s, value);
@@ -186,6 +248,8 @@ static void rcan_write_mcr(ClarionRcan *s, uint16_t value)
     }
     if (old_reset != s->reset_requested || old_halt != s->halt_requested) {
         *rcan_reg(s, RCAN_IRR) |= RCAN_IRR_RESET_HALT;
+        rcan_log(s, "event=mode old=%s new=%s sleep=0", old_mode,
+                 rcan_mode_name(s->reset_requested, s->halt_requested));
     }
     rcan_update_irq(s);
 }
@@ -225,6 +289,7 @@ static void rcan_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
 {
     ClarionRcan *s = opaque;
     uint16_t old_value;
+    uint16_t previous_value;
 
     if (addr + size > RCAN_SIZE) {
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -233,6 +298,7 @@ static void rcan_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
                       addr, size);
         return;
     }
+    previous_value = *rcan_reg(s, addr & ~1);
     if (size == 1) {
         uint16_t *reg = rcan_reg(s, addr & ~1);
         bool mailbox = addr >= RCAN_MAILBOX_BASE && addr < RCAN_MAILBOX_END;
@@ -275,6 +341,28 @@ static void rcan_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
                       " size %u\n",
                       addr, size);
         return;
+    }
+    if (previous_value != *rcan_reg(s, addr & ~1)) {
+        if (addr == RCAN_MBIMR0 || addr == RCAN_MBIMR1) {
+            rcan_log(s, "event=filter field=mailbox-mask offset=0x%03"
+                     HWADDR_PRIx " value=0x%04x", addr,
+                     *rcan_reg(s, addr));
+        } else if (addr >= RCAN_MAILBOX_BASE && addr < RCAN_MAILBOX_END) {
+            hwaddr base = RCAN_MAILBOX_BASE +
+                ((addr - RCAN_MAILBOX_BASE) / RCAN_MAILBOX_STRIDE) *
+                RCAN_MAILBOX_STRIDE;
+            hwaddr field = (addr - base) & ~1;
+            const char *name = field == 0 ? "id" :
+                               field == 4 ? "id-mask" :
+                               field == 0x10 ? "config" : NULL;
+
+            if (name) {
+                rcan_log(s, "event=filter mailbox=%u field=%s value=0x%04x",
+                         (unsigned)((base - RCAN_MAILBOX_BASE) /
+                                    RCAN_MAILBOX_STRIDE), name,
+                         *rcan_reg(s, addr & ~1));
+            }
+        }
     }
     trace_clarion_rcan_write(qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL),
                              SUPERH_CPU(current_cpu)->env.pc, size, addr,
@@ -350,9 +438,141 @@ bool clarion_rcan_inject(ClarionRcan *s, uint16_t id, const uint8_t *data,
         } else {
             *rcan_reg(s, RCAN_RXPR1) |= bit >> 16;
         }
+        rcan_log_frame(s, "RX", i, id, data, len);
         rcan_update_irq(s);
         qemu_log("clarion-rcan: rx id=%03x mailbox=%u len=%u\n", id, i, len);
         return true;
     }
+    rcan_log_frame(s, "RX", -1, id, data, len);
     return false;
+}
+
+static bool rcan_parse_frame(const char *text, uint16_t *id, uint8_t data[8],
+                             unsigned *len)
+{
+    const char *hash = strchr(text, '#');
+    char idbuf[9];
+    const char *end;
+    unsigned long parsed;
+    const char *p;
+
+    if (!hash || hash == text || hash - text > 8) {
+        return false;
+    }
+    memcpy(idbuf, text, hash - text);
+    idbuf[hash - text] = '\0';
+    if (qemu_strtoul(idbuf, &end, 16, &parsed) || end == idbuf || *end ||
+        parsed > 0x7ff) {
+        return false;
+    }
+    *len = 0;
+    p = hash + 1;
+    while (*p) {
+        int hi, lo;
+
+        while (g_ascii_isspace(*p) || *p == ',') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        if (!p[0] || !p[1]) {
+            return false;
+        }
+        hi = g_ascii_xdigit_value(p[0]);
+        lo = g_ascii_xdigit_value(p[1]);
+        p += 2;
+        if (hi < 0 || lo < 0 || *len == 8 ||
+            (*p && !g_ascii_isspace(*p) && *p != ',' &&
+             !g_ascii_isxdigit(*p))) {
+            return false;
+        }
+        data[(*len)++] = hi * 16 + lo;
+    }
+    *id = parsed;
+    return *len != 0;
+}
+
+static void rcan_replay_tick(void *opaque)
+{
+    RcanReplay *r = opaque;
+
+    clarion_rcan_inject(r->s, r->id, r->data, r->len);
+    timer_mod(r->timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + r->period_ms);
+}
+
+void clarion_rcan_set_log(ClarionRcan *s, const char *path)
+{
+    if (s->canlog) {
+        fclose(s->canlog);
+        s->canlog = NULL;
+    }
+    if (path && *path) {
+        s->canlog = fopen(path, "a");
+        if (!s->canlog) {
+            warn_report("can-log: %s: %s", path, strerror(errno));
+        }
+    }
+}
+
+void clarion_rcan_set_replay(ClarionRcan *s, const char *path)
+{
+    gchar *contents, **lines;
+    GError *error = NULL;
+
+    if (s->replay) {
+        for (guint i = 0; i < s->replay->len; i++) {
+            RcanReplay *r = g_ptr_array_index(s->replay, i);
+
+            timer_del(r->timer);
+            timer_free(r->timer);
+            g_free(r);
+        }
+        g_ptr_array_free(s->replay, true);
+        s->replay = NULL;
+    }
+    if (!path || !*path) {
+        return;
+    }
+    if (!g_file_get_contents(path, &contents, NULL, &error)) {
+        warn_report("can-replay: %s", error->message);
+        g_error_free(error);
+        return;
+    }
+    s->replay = g_ptr_array_new();
+    lines = g_strsplit(contents, "\n", -1);
+    g_free(contents);
+    for (guint i = 0; lines[i]; i++) {
+        gchar *line = g_strstrip(lines[i]);
+        RcanReplay *r;
+        char frame[64];
+        const char *end;
+        unsigned long period;
+        unsigned len;
+
+        if (!*line || *line == '#') {
+            continue;
+        }
+        if (qemu_strtoul(line, &end, 10, &period) || end == line ||
+            *end == '\0' || !g_ascii_isspace(*end) ||
+            !period || period > UINT32_MAX ||
+            sscanf(end, "%63s", frame) != 1) {
+            warn_report("can-replay: invalid line: %s", line);
+            continue;
+        }
+        r = g_new0(RcanReplay, 1);
+        r->s = s;
+        r->period_ms = period;
+        if (!rcan_parse_frame(frame, &r->id, r->data, &len)) {
+            warn_report("can-replay: invalid frame: %s", frame);
+            g_free(r);
+            continue;
+        }
+        r->len = len;
+        r->timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, rcan_replay_tick, r);
+        timer_mod(r->timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + period);
+        g_ptr_array_add(s->replay, r);
+    }
+    g_strfreev(lines);
 }

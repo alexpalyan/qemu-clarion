@@ -15,5 +15,7 @@ ClarionRcan *clarion_rcan_init(MemoryRegion *sysmem, hwaddr base, qemu_irq irq);
 
 bool clarion_rcan_inject(ClarionRcan *s, uint16_t id, const uint8_t *data,
                          unsigned len);
+void clarion_rcan_set_log(ClarionRcan *s, const char *path);
+void clarion_rcan_set_replay(ClarionRcan *s, const char *path);
 
 #endif
