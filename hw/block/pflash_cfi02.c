@@ -63,6 +63,8 @@
 enum {
     WCYCLE_CFI              = 7,
     WCYCLE_AUTOSELECT_CFI   = 8,
+    WCYCLE_WRITE_BUFFER_ABORT_UNLOCK1 = 9,
+    WCYCLE_WRITE_BUFFER_ABORT_CONFIRM = 10,
 };
 
 struct PFlashCFI02 {
@@ -630,6 +632,22 @@ static void pflash_write(void *opaque, hwaddr offset, uint64_t value,
 
     if (pfl->cmd == 0x25) {
         if (pfl->wcycle == 6) {
+            if (boff == pfl->unlock_addr0 && cmd == 0xAA) {
+                pfl->wcycle = WCYCLE_WRITE_BUFFER_ABORT_UNLOCK1;
+            }
+            return;
+        }
+        if (pfl->wcycle == WCYCLE_WRITE_BUFFER_ABORT_UNLOCK1) {
+            if (boff == pfl->unlock_addr1 && cmd == 0x55) {
+                pfl->wcycle = WCYCLE_WRITE_BUFFER_ABORT_CONFIRM;
+            } else {
+                pfl->wcycle = 6;
+            }
+            return;
+        }
+        if (pfl->wcycle == WCYCLE_WRITE_BUFFER_ABORT_CONFIRM) {
+            /* 0xF0 is handled by reset_flash above. */
+            pfl->wcycle = 6;
             return;
         }
         pflash_write_buffer_data(pfl, offset, value, width);
