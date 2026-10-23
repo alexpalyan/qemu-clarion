@@ -451,10 +451,29 @@ static bool called_from_hook(uint32_t lr)
     return false;
 }
 
+/*
+ * A card can hold several XIP copies of coredll.dll. An entry of an inactive
+ * copy may fall a few instructions into the same function of the active one,
+ * even inside a loop, so one call can reach several hooks with the same
+ * return address. Compare each hit with the entry the call started at.
+ */
+static bool same_call_as_last(uint32_t addr, uint32_t lr)
+{
+    static uint32_t entry_addr, entry_lr;
+
+    if (lr == entry_lr && addr - entry_addr - 1 < NESTED_CALL_WINDOW) {
+        return true;
+    }
+    entry_addr = addr;
+    entry_lr = lr;
+    return false;
+}
+
 static void print_debug(unsigned int vcpu_index, void *userdata)
 {
     DbgSymbol *sym = userdata;
     uint32_t args[4] = { 0 }, sp, lr, fmt_addr;
+    bool skip;
     g_autoptr(GString) message = g_string_new(NULL);
     (void)vcpu_index;
     for (unsigned int i = 0; i < 4; i++) {
@@ -463,6 +482,12 @@ static void print_debug(unsigned int vcpu_index, void *userdata)
     sp = read_reg(reg_sp);
     lr = read_reg(reg_lr);
     if (called_from_hook(lr)) {
+        return;
+    }
+    g_mutex_lock(&output_lock);
+    skip = same_call_as_last(sym->addr, lr);
+    g_mutex_unlock(&output_lock);
+    if (skip) {
         return;
     }
     if (!strcmp(sym->name, "OutputDebugStringW")) {
