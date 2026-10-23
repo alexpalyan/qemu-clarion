@@ -364,4 +364,5 @@ riscv_aplic_write(uint64_t offset, unsigned size, uint64_t value) "offset: 0x%" 
 
 # clarion_qy7_int2.c
 clarion_qy7_int2_read(uint64_t offset, uint64_t value) "offset: 0x%02" PRIx64 ", value: 0x%08" PRIx64
-clarion_qy7_int2_write(uint64_t offset, uint64_t value) "offset: 0x%02" PRIx64 ", value: 0x%08" PRIx64
+clarion_qy7_int2_write(uint64_t offset, uint64_t value, uint64_t pc, uint64_t time_ms) "offset: 0x%02" PRIx64 ", value: 0x%08" PRIx64 ", PC: 0x%08" PRIx64 ", guest_ms: %" PRIu64
+clarion_qy7_int2_sdhi(int source, int level, uint64_t pc, int imask, uint32_t mask) "source: %d, level: %d, PC: 0x%08" PRIx64 ", SR.IMASK: %d, mask: 0x%08" PRIx32
