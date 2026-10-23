@@ -95,6 +95,8 @@ typedef struct DispFrame {
 #define CMD_KEY             CMD_PANEL_KEY
 #define KEY_PRESSED         0x80
 #define CMD_ROTARY          0x35
+/* VOL push (power): kepdrv takes a bare 37 as key id f0, VK 05, pressed */
+#define CMD_POWER           0x37
 
 /*
  * Inter-frame gap, as in the board MCU model: the SCIF receiver has a 16-byte
@@ -647,6 +649,11 @@ static bool disp_knob_key(ClarionDispMicomState *s, QemuInputEvent *evt)
     case KEY_MINUS:
         if (evt->key.down) {
             disp_rotary(s, evt->key.key == KEY_EQUAL ? 1 : -1, 0);
+        }
+        return true;
+    case KEY_O:
+        if (evt->key.down) {
+            disp_queue(s, (const uint8_t[]){ CMD_POWER }, 1);
         }
         return true;
     }

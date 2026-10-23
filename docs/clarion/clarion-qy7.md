@@ -28,7 +28,7 @@ waits for the guest's `DLE ACK` before completing the key event.
 Host keys follow one table for QY7 and QY8 (see the QY8 reference, “Panel
 keys and knobs”): the same key presses the same function. On QY7 only the
 codes above and the MCAN routes below are proven; other keys of the table
-(`Esc`, `Enter`, `C`, `A`, `[`/`]`, F1–F9, knobs) send nothing here.
+(`Esc`, `Enter`, `C`, `A`, `[`/`]`, F1–F9, knobs, `O` power) send nothing here.
 
 The active QY7 `kepdrv.dll` table observed after boot has two first-stage
 entries, `01 -> 01` and `21 -> 02`, and two second-stage entries,
