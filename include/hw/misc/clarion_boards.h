@@ -34,4 +34,35 @@ static const ClarionBoardInfo clarion_boards[] = {
     { "QY7221NL", "qy7221nl", "sh4", "clarion-qy7", 1, "shift=2" },
 };
 
+/*
+ * Units missing from the table above run on their series' machine, chosen
+ * by the model prefix. Such a unit has not been tested; callers warn.
+ */
+static const ClarionBoardInfo clarion_series[] = {
+    { "QY7", "qy7", "sh4", "clarion-qy7", 1, "shift=2" },
+    { "QY8", "qy8", "arm", "clarion-qy8", 1, NULL },
+};
+
+/* Look up a unit model; *untested is set when only the series matched. */
+static inline const ClarionBoardInfo *clarion_board_find(const char *model,
+                                                         int *untested)
+{
+    *untested = 0;
+    for (size_t i = 0; i < sizeof(clarion_boards) / sizeof(*clarion_boards);
+         i++) {
+        if (!strcmp(model, clarion_boards[i].model)) {
+            return &clarion_boards[i];
+        }
+    }
+    for (size_t i = 0; i < sizeof(clarion_series) / sizeof(*clarion_series);
+         i++) {
+        if (!strncmp(model, clarion_series[i].model,
+                     strlen(clarion_series[i].model))) {
+            *untested = 1;
+            return &clarion_series[i];
+        }
+    }
+    return NULL;
+}
+
 #endif

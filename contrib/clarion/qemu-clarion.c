@@ -8,16 +8,6 @@
 
 #include "hw/misc/clarion_boards.h"
 
-static const ClarionBoardInfo *find_model(const char *model)
-{
-    for (size_t i = 0; i < G_N_ELEMENTS(clarion_boards); i++) {
-        if (!strcmp(model, clarion_boards[i].model)) {
-            return &clarion_boards[i];
-        }
-    }
-    return NULL;
-}
-
 static gboolean read_model(const char *path,
                            char model[CLARION_PROD_MODEL_LEN + 1])
 {
@@ -145,6 +135,7 @@ int main(int argc, char **argv)
     const char *sd = NULL;
     char model[CLARION_PROD_MODEL_LEN + 1] = "";
     const ClarionBoardInfo *board;
+    int untested;
     char *program_path;
     char *directory;
     char *emulator;
@@ -182,7 +173,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "qemu-clarion: no PROD block in %s\n", flash);
         return 1;
     }
-    board = find_model(model);
+    board = clarion_board_find(model, &untested);
     if (!board) {
         fprintf(stderr, "qemu-clarion: unknown model %s; supported: ", model);
         for (size_t i = 0; i < G_N_ELEMENTS(clarion_boards); i++) {
@@ -190,6 +181,10 @@ int main(int argc, char **argv)
         }
         fputc('\n', stderr);
         return 1;
+    }
+    if (untested) {
+        fprintf(stderr, "qemu-clarion: warning: %s has not been tested; "
+                "using the %s machine\n", model, board->machine);
     }
     if (sd && !board->has_sd) {
         fprintf(stderr, "qemu-clarion: %s does not support an SD card\n",

@@ -1766,13 +1766,17 @@ static const Qy8BoardProperties *qy8_properties_by_name(const char *name)
 
 static const ClarionBoardInfo *qy8_board_by_model(const char *model)
 {
-    for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
-        if (!strcmp(model, clarion_boards[i].model) &&
-            !strcmp(clarion_boards[i].target, "arm")) {
-            return &clarion_boards[i];
-        }
+    int untested;
+    const ClarionBoardInfo *board = clarion_board_find(model, &untested);
+
+    if (!board || strcmp(board->target, "arm")) {
+        return NULL;
     }
-    return NULL;
+    if (untested) {
+        warn_report("clarion-qy8: unit model %s has not been tested; "
+                    "using board defaults", model);
+    }
+    return board;
 }
 
 /* Read from the flash image before any device is built on top of it */
