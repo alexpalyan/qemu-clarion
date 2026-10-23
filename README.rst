@@ -7,7 +7,10 @@ of Clarion head units fitted to the Nissan Leaf, well enough to boot their
 original Windows CE firmware. It exists to study and repair these units
 without risking the one in the car.
 
-No firmware is included. You supply dumps taken from your own unit.
+No firmware is included. You supply dumps taken from your own unit, usually
+with `LeafSDTools <https://github.com/developerfromjokela/leafsdtools>`_,
+which runs from an SD card in the unit's update mode and writes the NOR
+flash to the card.
 
 .. list-table::
    :header-rows: 1
@@ -32,15 +35,20 @@ No firmware is included. You supply dumps taken from your own unit.
      - ARM (Renesas R-Car)
      - ``clarion-qy8``
      - ``qemu-system-arm``
-     - 2018+ Leaf (ZE1), European and US units; recognised from the
-       ``PROD`` block, same board as QY8652NB (TMA460 touch). Not yet run by
-       the maintainer
+     - 2018+ Leaf (ZE1), European and US units, same board as QY8652NB
+       (TMA460 touch); boot to the consent screen
    * - QY8202PB
      - ARM (Renesas R-Car)
      - ``clarion-qy8``
      - ``qemu-system-arm``
-     - e-NV200 (ME0); recognised from the ``PROD`` block, same board as
-       QY8202NA (TMA616 touch). Not yet run by the maintainer
+     - e-NV200 (ME0), same board as QY8202NA (TMA616 touch); boots to the
+       consent screen
+   * - QY8202NC, QY8252NF
+     - ARM (Renesas R-Car)
+     - ``clarion-qy8``
+     - ``qemu-system-arm``
+     - not in the board table, run with the QY8 defaults (TMA460 touch);
+       boot to the consent screen, touch not checked
    * - QY7221NL
      - SH-4A
      - ``clarion-qy7``
@@ -48,6 +56,10 @@ No firmware is included. You supply dumps taken from your own unit.
      - boots to the user interface with the paired map card: consent
        screen, touch input, map screen; MENU, MAP/VOICE, STATUS and ZERO
        EMISSION keys arrive over the vehicle CAN bus
+
+Other units run on the machine of their series, chosen by the ``QY7`` or
+``QY8`` prefix of the model, with a warning that the unit has not been
+tested.
 
 Developed and tested on macOS (Apple Silicon). A Linux build should work
 the same way but is not covered here.

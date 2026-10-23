@@ -447,12 +447,13 @@ static void qy7_reset(void *opaque)
 
 static const ClarionBoardInfo *qy7_board_by_model(const char *model)
 {
-    for (int i = 0; i < ARRAY_SIZE(clarion_boards); i++) {
-        if (!strcmp(model, clarion_boards[i].model)) {
-            return &clarion_boards[i];
-        }
+    int untested;
+    const ClarionBoardInfo *board = clarion_board_find(model, &untested);
+
+    if (board && untested && !strcmp(board->machine, "clarion-qy7")) {
+        warn_report("clarion-qy7: unit model %s has not been tested", model);
     }
-    return NULL;
+    return board;
 }
 
 static void qy7_report_invalid_model(const char *model)
