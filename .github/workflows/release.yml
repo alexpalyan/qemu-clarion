@@ -48,8 +48,7 @@ jobs:
               --disable-werror --enable-plugins --disable-docs $extra
 
       - name: Build
-        run: ninja -C build-pkg qemu-system-arm qemu-system-sh4 qemu-img qemu-clarion \
-              contrib-plugins
+        run: ninja -C build-pkg qemu-system-arm qemu-system-sh4 qemu-img qemu-clarion contrib-plugins
 
       - name: Package
         id: pkg
