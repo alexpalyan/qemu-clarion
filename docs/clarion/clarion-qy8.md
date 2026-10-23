@@ -56,6 +56,9 @@ the same command line is merged with the first.
 | `gps` | `on` | built-in u-blox GNSS receiver on SCIF2; `off` leaves SCIF2 on `-serial` index 3 |
 | `g2d` | `on` | minimal 2DG blitter model: completes blits for the guest driver, draws nothing; `off` leaves the block unmodelled |
 | `g2d-log` | unset | file that receives one JSON line per 2DG start (list address, first 256 words) |
+| `can-log` | unset | append CAN frames and mode/filter changes using guest virtual milliseconds |
+| `can-replay` | unset | file of periodic `period_ms ID#DATA` receive frames |
+| `can-rx` | write-only | inject one `ID#DATA` frame at runtime through QMP |
 | `shcore` | `on` | `on` models synthetic CPUCOM startup and initialization-end; `init` keeps only initialization-end; `off` disables SH modeling |
 | `gps-lat` | `50.4501` | fix latitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
@@ -149,6 +152,38 @@ No packets were captured from a real SH core or Bluetooth module. Other tasks
 and functions are logged without a response; profile traffic is not modeled.
 Disable the model with `-M clarion-qy8,shcore=off` (or `QY8_SHCORE=off` with
 `tools/qy8_run.sh`).
+
+### CAN controller
+
+The Renesas controller is mapped at `0xfffd1000`. `can-log` appends one
+line per observed TX/RX frame and mode or filter change. Frame lines use
+`guest_ms=... direction=... mailbox=... id=... format=... dlc=... data=...`;
+the timestamp uses the QEMU virtual guest clock. Receive injection matches
+the ID against an armed mailbox; receive masks are not modeled. For example,
+inject a standard frame after the guest has configured mailbox 0 for ID
+`0x683`:
+
+```json
+{"execute":"qom-set","arguments":{"path":"/machine","property":"can-rx","value":"683#400d81"}}
+```
+
+At launch, set `can-log` and `can-replay` as machine properties:
+
+```sh
+-M clarion-qy8,can-log=/tmp/qy8-can.log,can-replay=/tmp/can-replay.txt
+```
+
+Replay files contain one periodic frame per line. Blank lines and lines
+beginning with `#` are ignored:
+
+```text
+# period in ms, then can-utils style ID#DATA
+100 683#400d81
+```
+
+`can-rx` is write-only; set it with QMP after machine initialization. A frame
+with no configured receive mailbox is still recorded in `can-log` with
+`mailbox=-1` and is not delivered to the guest.
 
 ## 3. Serial ports and SD cards
 

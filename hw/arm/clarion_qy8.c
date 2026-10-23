@@ -219,6 +219,8 @@ static int qy8_scif_chr_index(int scif)
  * for command completion only through the ISR.
  */
 #define QY8_CAN_BASE        0xFFFD1000
+/* QY8652NB nk.exe @0x88013090: 0xFFFD1800 -> IRQ 0x73 (115), SPI 83. */
+#define QY8_CAN_SPI         83
 #define QY8_SDHI_BASE       0xFFE4C000
 #define QY8_SDHI_STRIDE     0x1000
 #define QY8_NUM_SDHI        2
@@ -1807,6 +1809,8 @@ struct Qy8MachineState {
     char *render_lib;
     char *render_log;
     char *render_dump_dir;
+    char *can_log_path;
+    char *can_replay_path;
 
     MemoryRegion flash;          /* only when flash is provided as ROM */
     DriveInfo *flash_drive;      /* -drive if=pflash: writable copy */
@@ -2660,8 +2664,18 @@ static void qy8_init(MachineState *machine)
      */
     if (g_strcmp0(getenv("QY8_CAN"), "off") != 0) {
         s->can = qdev_new(TYPE_RENESAS_CAN);
+        if (*s->can_log_path) {
+            object_property_set_str(OBJECT(s->can), "can-log",
+                                    s->can_log_path, &error_fatal);
+        }
+        if (*s->can_replay_path) {
+            object_property_set_str(OBJECT(s->can), "can-replay",
+                                    s->can_replay_path, &error_fatal);
+        }
         sysbus_realize_and_unref(SYS_BUS_DEVICE(s->can), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(s->can), 0, QY8_CAN_BASE);
+        sysbus_connect_irq(SYS_BUS_DEVICE(s->can), 0,
+                           qdev_get_gpio_in(s->gic, QY8_CAN_SPI));
     }
 
     /*
@@ -2869,6 +2883,39 @@ static void qy8_gps_course_set(Object *obj, const char *value, Error **errp)
     qy8_gps_position_update(s);
 }
 
+static void qy8_can_log_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    g_free(s->can_log_path);
+    s->can_log_path = g_strdup(value);
+    if (s->can) {
+        object_property_set_str(OBJECT(s->can), "can-log", value, errp);
+    }
+}
+
+static void qy8_can_replay_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    g_free(s->can_replay_path);
+    s->can_replay_path = g_strdup(value);
+    if (s->can) {
+        object_property_set_str(OBJECT(s->can), "can-replay", value, errp);
+    }
+}
+
+static void qy8_can_rx_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    if (!s->can) {
+        error_setg(errp, "can-rx is available after QY8 initialization");
+        return;
+    }
+    object_property_set_str(OBJECT(s->can), "rx", value, errp);
+}
+
 static bool qy8_micom_get(Object *obj, Error **errp)
 {
     return QY8_MACHINE(obj)->micom_on;
@@ -2990,6 +3037,8 @@ static void qy8_machine_instance_init(Object *obj)
     s->render_lib = g_strdup("");
     s->render_log = g_strdup("");
     s->render_dump_dir = g_strdup("");
+    s->can_log_path = g_strdup("");
+    s->can_replay_path = g_strdup("");
     object_property_add_str(obj, "render", qy8_render_get, qy8_render_set);
     object_property_set_description(obj, "render",
         "render backend: cpu, angle, or off");
@@ -3005,6 +3054,15 @@ static void qy8_machine_instance_init(Object *obj)
                             qy8_render_dump_dir_set);
     object_property_set_description(obj, "render-dump-dir",
         "optional directory for renderer frame and draw dumps");
+    object_property_add_str(obj, "can-log", NULL, qy8_can_log_set);
+    object_property_set_description(obj, "can-log",
+        "append QY8 CAN frames and mode changes to this file");
+    object_property_add_str(obj, "can-rx", NULL, qy8_can_rx_set);
+    object_property_set_description(obj, "can-rx",
+        "inject a CAN frame on QY8 as ID#DATA in hexadecimal");
+    object_property_add_str(obj, "can-replay", NULL, qy8_can_replay_set);
+    object_property_set_description(obj, "can-replay",
+        "replay period_ms ID#DATA lines from this file");
 
     /*
      * Default 5 = "NORM(RES)>>", normal boot with full debug output; on the
