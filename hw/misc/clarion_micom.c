@@ -41,10 +41,8 @@
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "hw/misc/clarion_micom.h"
-#include "hw/misc/clarion_boards.h"
 #include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
-#include "system/runstate.h"
 
 #define DLE     0x10
 #define STX     0x02
@@ -95,9 +93,6 @@ struct ClarionMicomState {
     unsigned handshake_count;
     bool generic_reply;
     uint8_t generic_reply_subcode;
-    bool qy7_power_cycle;
-    bool qy7_power_cycle_ack_queued;
-    bool cur_is_qy7_power_cycle_ack;
 };
 
 /* --- frame construction ------------------------------------------------ */
@@ -163,8 +158,6 @@ static void micom_tx_expire(void *opaque)
     if (!s->cur) {
         s->cur = g_queue_pop_head(s->frames);
         s->cur_off = 0;
-        s->cur_is_qy7_power_cycle_ack = s->qy7_power_cycle_ack_queued;
-        s->qy7_power_cycle_ack_queued = false;
         if (!s->cur) {
             return;
         }
@@ -178,17 +171,9 @@ static void micom_tx_expire(void *opaque)
         s->cur_off += took;
     }
     if (s->cur_off >= s->cur->len) {
-        bool power_cycle = s->cur_is_qy7_power_cycle_ack;
-
         g_byte_array_free(s->cur, TRUE);
         s->cur = NULL;
         s->cur_off = 0;
-        s->cur_is_qy7_power_cycle_ack = false;
-        if (power_cycle) {
-            qemu_system_shutdown_request_with_code(
-                SHUTDOWN_CAUSE_GUEST_SHUTDOWN,
-                CLARION_POWER_CYCLE_EXIT_CODE);
-        }
         if (!g_queue_is_empty(s->frames)) {
             micom_arm(s, MICOM_GAP_NS);     /* inter-frame gap */
         }
@@ -318,13 +303,6 @@ static void micom_frame(ClarionMicomState *s)
                !memcmp(data, cmd_60_3f, sizeof(cmd_60_3f))) {
         action = "reply-10-3f";
         micom_queue(s, rsp_10_3f, sizeof(rsp_10_3f));
-    } else if (s->qy7_power_cycle && len == 8 && data[0] == 0x11 &&
-               data[1] == 0x0d && data[2] == 0x00 && data[3] == 0x01 &&
-               data[4] == 0x00 && data[5] == 0x00 && data[6] == 0x40 &&
-               data[7] == 0x20) {
-        /* POW::Acc Off Notify SystemEXE call observed at 0x039d572c. */
-        action = "qy7-acc-on-power-cycle";
-        s->qy7_power_cycle_ack_queued = true;
     } else if (s->generic_reply) {
         /* QY8 fallback; QY7 disables synthetic replies by default. */
         const uint8_t recv[2] = { cmd, s->generic_reply_subcode };
@@ -454,8 +432,6 @@ static const Property clarion_micom_props[] = {
                      generic_reply, true),
     DEFINE_PROP_UINT8("generic-reply-subcode", ClarionMicomState,
                       generic_reply_subcode, 0),
-    DEFINE_PROP_BOOL("qy7-power-cycle", ClarionMicomState, qy7_power_cycle,
-                     false),
     DEFINE_PROP_BOOL("cenet-audio-off", ClarionMicomState,
                      cenet_audio_off, false),
     DEFINE_PROP_BOOL("cenet-antitheft-release", ClarionMicomState,

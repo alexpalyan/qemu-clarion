@@ -643,7 +643,6 @@ static void qy7_init(MachineState *machine)
                           qmachine->micom_generic_reply);
         qdev_prop_set_uint8(micom, "generic-reply-subcode",
                             qmachine->micom_generic_reply_subcode);
-        qdev_prop_set_bit(micom, "qy7-power-cycle", true);
         qdev_prop_set_bit(micom, "cenet-audio-off",
                           qmachine->micom_audio_off);
         qdev_prop_set_bit(micom, "cenet-antitheft-release",
