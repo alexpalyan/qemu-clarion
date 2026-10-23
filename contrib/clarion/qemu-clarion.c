@@ -1,9 +1,12 @@
 #include "config-host.h"
 #include <errno.h>
 #include <glib.h>
+#include <glib/gstdio.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "hw/misc/clarion_boards.h"
@@ -77,9 +80,11 @@ static char *drive_argument(const char *path, const char *interface,
     GString *drive = g_string_new(NULL);
 
     if (!strcmp(interface, "pflash")) {
-        g_string_append(drive, "if=pflash,format=raw,file=");
+        g_string_append_printf(drive, "if=pflash,format=%s,file=",
+                               read_only ? "qcow2" : "raw");
     } else {
-        g_string_append(drive, "if=sd,index=0,format=raw,file=");
+        g_string_append_printf(drive, "if=sd,index=0,format=%s,file=",
+                               read_only ? "qcow2" : "raw");
     }
     for (const char *p = path; *p; p++) {
         g_string_append_c(drive, *p);
@@ -87,10 +92,133 @@ static char *drive_argument(const char *path, const char *interface,
             g_string_append_c(drive, ',');
         }
     }
-    if (read_only) {
-        g_string_append(drive, ",snapshot=on");
-    }
     return g_string_free(drive, FALSE);
+}
+
+static volatile sig_atomic_t active_child;
+static volatile sig_atomic_t caught_signal;
+
+static void forward_signal(int signal_number)
+{
+    caught_signal = signal_number;
+    if (active_child > 0) {
+        kill(active_child, signal_number);
+    }
+}
+
+static gboolean install_signal_forwarding(void)
+{
+    const int signals[] = { SIGINT, SIGTERM, SIGHUP, SIGQUIT };
+    struct sigaction action = { 0 };
+
+    action.sa_handler = forward_signal;
+    sigemptyset(&action.sa_mask);
+    for (size_t i = 0; i < G_N_ELEMENTS(signals); i++) {
+        if (sigaction(signals[i], &action, NULL)) {
+            fprintf(stderr, "qemu-clarion: cannot handle signals: %s\n",
+                    strerror(errno));
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static int run_supervised(char **args)
+{
+    for (;;) {
+        int status;
+        caught_signal = 0;
+        pid_t child = fork();
+
+        if (child < 0) {
+            fprintf(stderr, "qemu-clarion: cannot fork: %s\n",
+                    strerror(errno));
+            return 1;
+        }
+        if (!child) {
+            struct sigaction action = { .sa_handler = SIG_DFL };
+
+            sigemptyset(&action.sa_mask);
+            sigaction(SIGINT, &action, NULL);
+            sigaction(SIGTERM, &action, NULL);
+            sigaction(SIGHUP, &action, NULL);
+            sigaction(SIGQUIT, &action, NULL);
+            execv(args[0], args);
+            fprintf(stderr, "qemu-clarion: cannot execute %s: %s\n",
+                    args[0], strerror(errno));
+            _exit(errno == ENOENT ? 127 : 126);
+        }
+
+        active_child = child;
+        if (caught_signal) {
+            kill(child, caught_signal);
+        }
+        while (waitpid(child, &status, 0) < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            fprintf(stderr, "qemu-clarion: waitpid failed: %s\n",
+                    strerror(errno));
+            active_child = 0;
+            return 1;
+        }
+        active_child = 0;
+
+        if (caught_signal) {
+            return 128 + caught_signal;
+        }
+        if (WIFEXITED(status)) {
+            int exit_code = WEXITSTATUS(status);
+
+            if (exit_code == CLARION_POWER_CYCLE_EXIT_CODE) {
+                fprintf(stderr, "qemu-clarion: power cycle; restarting QEMU\n");
+                continue;
+            }
+            return exit_code;
+        }
+        if (WIFSIGNALED(status)) {
+            return 128 + WTERMSIG(status);
+        }
+        return 1;
+    }
+}
+
+static gboolean create_overlay(const char *qemu_img, const char *backing,
+                               const char *overlay)
+{
+    char *args[] = { (char *)qemu_img, (char *)"create", (char *)"-q",
+                     (char *)"-f", (char *)"qcow2", (char *)"-F",
+                     (char *)"raw", (char *)"-b", (char *)backing,
+                     (char *)overlay, NULL };
+    g_autoptr(GError) error = NULL;
+    int status;
+
+    if (!g_spawn_sync(NULL, args, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL,
+                      NULL, NULL, &status, &error)) {
+        fprintf(stderr, "qemu-clarion: cannot create overlay: %s\n",
+                error->message);
+        return FALSE;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status)) {
+        fprintf(stderr, "qemu-clarion: qemu-img failed creating %s\n",
+                overlay);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void remove_temp_overlays(const char *temp_dir, const char *nor,
+                                 const char *sd)
+{
+    if (nor) {
+        g_unlink(nor);
+    }
+    if (sd) {
+        g_unlink(sd);
+    }
+    if (temp_dir) {
+        g_rmdir(temp_dir);
+    }
 }
 
 static gboolean has_console_argument(int argc, char **argv)
@@ -133,12 +261,22 @@ int main(int argc, char **argv)
     int first_arg = 1;
     const char *flash;
     const char *sd = NULL;
+    const char *flash_drive;
+    const char *sd_drive = NULL;
     char model[CLARION_PROD_MODEL_LEN + 1] = "";
     const ClarionSeries *board;
-    char *program_path;
-    char *directory;
-    char *emulator;
-    char **args;
+    g_autofree char *program_path = NULL;
+    g_autofree char *directory = NULL;
+    g_autofree char *emulator = NULL;
+    g_autofree char *qemu_img = NULL;
+    g_autofree char *flash_backing = NULL;
+    g_autofree char *sd_backing = NULL;
+    g_autofree char *temp_dir = NULL;
+    g_autofree char *nor_overlay = NULL;
+    g_autofree char *sd_overlay = NULL;
+    g_autofree char *nor_drive = NULL;
+    g_autofree char *sd_drive_arg = NULL;
+    g_autofree char **args = NULL;
     int arg_count = 0;
     gboolean user_console;
 
@@ -201,15 +339,61 @@ int main(int argc, char **argv)
         emulator = g_strdup_printf("%s/qemu-system-%s", directory,
                                    board->target);
     }
+    flash_drive = flash;
+    sd_drive = sd;
+    if (read_only) {
+        if (dry_run) {
+            nor_overlay = g_strdup("<temporary-nor-overlay.qcow2>");
+            if (sd) {
+                sd_overlay = g_strdup("<temporary-sd-overlay.qcow2>");
+            }
+        } else {
+            g_autofree char *qemu_img_libexec =
+                g_strdup_printf("%s/libexec/qemu-img", directory);
+            g_autofree char *qemu_img_build =
+                g_strdup_printf("%s/qemu-img", directory);
+
+            qemu_img = g_file_test(qemu_img_libexec, G_FILE_TEST_IS_EXECUTABLE)
+                ? g_steal_pointer(&qemu_img_libexec)
+                : g_steal_pointer(&qemu_img_build);
+            if (!g_file_test(qemu_img, G_FILE_TEST_IS_EXECUTABLE)) {
+                fprintf(stderr, "qemu-clarion: qemu-img not found beside %s\n",
+                        argv[0]);
+                return 1;
+            }
+            temp_dir = g_dir_make_tmp("qemu-clarion-XXXXXX", NULL);
+            if (!temp_dir) {
+                fprintf(stderr, "qemu-clarion: cannot create temp directory\n");
+                return 1;
+            }
+            nor_overlay = g_build_filename(temp_dir, "nor.qcow2", NULL);
+            if (sd) {
+                sd_overlay = g_build_filename(temp_dir, "sd.qcow2", NULL);
+            }
+            flash_backing = g_canonicalize_filename(flash, NULL);
+            if (sd) {
+                sd_backing = g_canonicalize_filename(sd, NULL);
+            }
+            if (!create_overlay(qemu_img, flash_backing, nor_overlay) ||
+                (sd && !create_overlay(qemu_img, sd_backing, sd_overlay))) {
+                remove_temp_overlays(temp_dir, nor_overlay, sd_overlay);
+                return 1;
+            }
+        }
+        flash_drive = nor_overlay;
+        sd_drive = sd_overlay;
+    }
     args = g_new0(char *, argc + 14);
     args[arg_count++] = emulator;
     args[arg_count++] = (char *)"-M";
     args[arg_count++] = (char *)board->machine;
     args[arg_count++] = (char *)"-drive";
-    args[arg_count++] = drive_argument(flash, "pflash", read_only);
+    nor_drive = drive_argument(flash_drive, "pflash", read_only);
+    args[arg_count++] = nor_drive;
     if (sd) {
         args[arg_count++] = (char *)"-drive";
-        args[arg_count++] = drive_argument(sd, "sd", read_only);
+        sd_drive_arg = drive_argument(sd_drive, "sd", read_only);
+        args[arg_count++] = sd_drive_arg;
     }
     user_console = has_console_argument(argc - first_arg, argv + first_arg);
     if (!user_console) {
@@ -254,6 +438,10 @@ int main(int argc, char **argv)
     }
     args[arg_count] = NULL;
     if (dry_run) {
+        if (read_only) {
+            fprintf(stderr, "qemu-clarion: read-only mode uses temporary "
+                    "qcow2 overlays\n");
+        }
         printf("%s", emulator);
         for (int i = 1; i < arg_count; i++) {
             printf(" %s", args[i]);
@@ -261,8 +449,11 @@ int main(int argc, char **argv)
         putchar('\n');
         return 0;
     }
-    execv(emulator, args);
-    fprintf(stderr, "qemu-clarion: cannot execute %s: %s\n", emulator,
-            strerror(errno));
-    return 1;
+    if (!install_signal_forwarding()) {
+        remove_temp_overlays(temp_dir, nor_overlay, sd_overlay);
+        return 1;
+    }
+    int exit_code = run_supervised(args);
+    remove_temp_overlays(temp_dir, nor_overlay, sd_overlay);
+    return exit_code;
 }

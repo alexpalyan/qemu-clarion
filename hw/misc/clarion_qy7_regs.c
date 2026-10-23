@@ -1,13 +1,16 @@
 /* Clarion QY7 board registers in SH7785 Area 6. */
 #include "qemu/osdep.h"
+#include "hw/misc/clarion_boards.h"
 #include "hw/misc/clarion_qy7_regs.h"
 #include "qemu/log.h"
+#include "system/runstate.h"
 
 #define QY7_REGS_BASE 0x19000000
 #define QY7_REGS_SIZE 0x00800100
 #define QY7_STATUS0 0x19400000
 #define QY7_DIPSW 0x19400002
 #define QY7_STATUS1 0x19800000
+#define QY7_POWER_HOLD (QY7_REGS_BASE + 0x00100000)
 #define QY7_EXTINT 0x00300000
 #define QY7_EXTINT_END 0x00300026
 
@@ -26,6 +29,7 @@ typedef struct QY7BoardRegs {
     uint16_t ext_aux[0x13];
     uint16_t ext_delivered;
     bool ext_power_enabled;
+    bool power_hold;
 } QY7BoardRegs;
 
 static int qy7_ext_group(hwaddr addr, const uint8_t *offsets, size_t count)
@@ -177,6 +181,22 @@ static void qy7_regs_write(void *opaque, hwaddr addr, uint64_t value,
                   "clarion-qy7-regs: write addr=0x%08" HWADDR_PRIx
                   " width=%u value=0x%" PRIx64 "\n",
                   QY7_REGS_BASE + addr, size, value);
+
+    if (addr == QY7_POWER_HOLD - QY7_REGS_BASE && size == 2) {
+        if (value == 1) {
+            s->power_hold = true;
+        } else if (value == 0 && s->power_hold) {
+            /* Kernel OFFP clears power hold at these guest code addresses. */
+            /* X110: 0x88047a24; X112: 0x88047fb4. */
+            s->power_hold = false;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "clarion-qy7-regs: power-hold released; "
+                          "requesting power cycle\n");
+            qemu_system_shutdown_request_with_code(
+                SHUTDOWN_CAUSE_GUEST_SHUTDOWN,
+                CLARION_POWER_CYCLE_EXIT_CODE);
+        }
+    }
 }
 
 static const MemoryRegionOps qy7_regs_ops = {

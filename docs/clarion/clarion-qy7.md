@@ -163,3 +163,21 @@ exports have fixed virtual addresses, so no runtime module-load adjustment is
 needed. For manual use, `-plugin PATH,image=NOR[,image=SD],out=FILE` performs
 the same scan; `syms=FILE` remains available as a fallback for explicit
 address lists.
+
+## QY7 power-off and process restart
+
+The micom frame `11 0d 00 01 00 00 40 20` is ordinary boot traffic and is
+ACKed without a power-cycle action. The updater's YES path instead proceeds
+through the kernel `OFFP` route. On X110, `nk.exe` writes zero to the board
+power-hold register `0xB9100000` at guest PC `0x88047A24`; boot IPL first
+asserts the same register with a write of one at `0xA0002488`. On X112, the
+corresponding OFFP write is at `0x88047FB4`. This register transition models
+the hardware releasing its power hold.
+
+After the release, the QY7 machine requests shutdown with the shared
+`CLARION_POWER_CYCLE_EXIT_CODE`. The `qemu-clarion` launcher treats that code
+as a power cycle and starts a new child QEMU with the same arguments. A direct
+`qemu-system-sh4` invocation exits with the power-cycle code because it has no
+supervisor. With `--read-only`, NOR and SD qcow2 overlays stay in place across
+the child restart and are removed when the launcher session exits; the NOR
+overlay therefore retains guest flash writes such as clearing BMF.

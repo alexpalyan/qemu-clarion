@@ -380,8 +380,8 @@ void clarion_micom_rx_byte(DeviceState *dev, uint8_t b)
 
     case RX_BCC:
         if (b != s->bcc) {
-            qemu_log_mask(LOG_GUEST_ERROR, "clarion-micom: BCC %#x, expected "
-                          "%#x; processing frame anyway\n", b, s->bcc);
+            qemu_log_mask(LOG_GUEST_ERROR, "clarion-micom: BCC 0x%x, expected "
+                          "0x%x; processing frame anyway\n", b, s->bcc);
         }
         micom_frame(s);
         s->rx_state = RX_IDLE;
