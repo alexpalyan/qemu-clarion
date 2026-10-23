@@ -48,7 +48,8 @@ jobs:
               --disable-werror --enable-plugins --disable-docs $extra
 
       - name: Build
-        run: ninja -C build-pkg qemu-system-arm qemu-system-sh4 qemu-clarion contrib-plugins
+        run: ninja -C build-pkg qemu-system-arm qemu-system-sh4 qemu-img qemu-clarion \
+              contrib-plugins
 
       - name: Package
         id: pkg
@@ -68,6 +69,9 @@ jobs:
           cd smoke/qemu-clarion-*
           # The launcher prints usage and exits non-zero without arguments.
           ./qemu-clarion 2>&1 | grep -i usage
+          ./qemu-clarion --help 2>&1 | grep -- --identify
+          libexec/qemu-img --version
+          test -x qmp.py
           test -f lib/libclarion-dbgprint.so || \
               test -f lib/libclarion-dbgprint.dylib
           libexec/qemu-system-arm -M help | grep clarion
