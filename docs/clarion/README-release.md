@@ -5,7 +5,7 @@ Layout:
 - `qemu-clarion`: launcher; reads the unit model from the PROD block of the
   NOR image and starts the matching engine.
 - `libexec/qemu-system-arm`: engine for QY8 units.
-- `libexec/qemu-system-sh4`: engine for the QY7221NL.
+- `libexec/qemu-system-sh4`: engine for QY7 units.
 - `libexec/qemu-img`: creates session overlays for `--read-only` runs.
 - `lib/`: debug-print plugin and bundled shared libraries.
 - `qmp.py`: drives a running unit over QMP (tap, screenshot, monitor
@@ -15,9 +15,13 @@ Usage:
 
     ./qemu-clarion NOR [SD]
     ./qemu-clarion --dbgprint guest.log NOR [SD]
+    ./qemu-clarion --identify NOR
     ./qemu-clarion --help
 
 `--dbgprint FILE` records Windows CE debug output while the guest runs.
+`--identify NOR` prints the unit model and firmware build of a NOR dump, and
+nothing else from it; include that output when asking for support of a new
+unit.
 
 Without a window, add a QMP socket and use `qmp.py`:
 

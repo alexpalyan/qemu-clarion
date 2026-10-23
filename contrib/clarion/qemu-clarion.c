@@ -48,8 +48,65 @@ static void usage(const char *program)
     fprintf(stderr,
             "usage: %s [-n] [--read-only] [--headless] "
             "[--dbgprint FILE] NOR [SD] "
-            "[QEMU arguments...]\n",
-            program);
+            "[QEMU arguments...]\n"
+            "       %s --identify NOR\n",
+            program, program);
+}
+
+/* Printable build string at @offset, e.g. "G218ENNI.120"; "" if none. */
+static void read_build(const char *path, unsigned long long offset,
+                       char build[17])
+{
+    FILE *file = fopen(path, "rb");
+    size_t n = 0;
+
+    build[0] = '\0';
+    if (!file) {
+        return;
+    }
+    if (!fseeko(file, offset, SEEK_SET)) {
+        n = fread(build, 1, 16, file);
+    }
+    fclose(file);
+    for (size_t i = 0; i < n; i++) {
+        if (!g_ascii_isgraph(build[i])) {
+            n = i;
+            break;
+        }
+    }
+    build[n] = '\0';
+}
+
+/*
+ * Print what a hardware support request needs: the unit model and the
+ * kernel build. Nothing else from PROD (serial numbers, codes) is shown.
+ */
+static int identify(const char *flash)
+{
+    char model[CLARION_PROD_MODEL_LEN + 1] = "";
+    char build[17];
+    const ClarionSeries *series;
+    GStatBuf st;
+
+    if (!read_model(flash, model)) {
+        fprintf(stderr, "qemu-clarion: no PROD block in %s\n", flash);
+        return 1;
+    }
+    series = clarion_series_find(model);
+    printf("model:    %s\n", model);
+    if (!series) {
+        printf("series:   unknown (expected QY7 or QY8)\n");
+        return 1;
+    }
+    read_build(flash, series->build_off, build);
+    printf("series:   %s (machine %s, qemu-system-%s)\n", series->prefix,
+           series->machine, series->target);
+    printf("firmware: %s (NOR 0x%llx)\n", build[0] ? build : "not found",
+           series->build_off);
+    if (!g_stat(flash, &st)) {
+        printf("image:    %lld bytes\n", (long long)st.st_size);
+    }
+    return 0;
 }
 
 static char *find_dbgprint_plugin(const char *directory)
@@ -280,8 +337,15 @@ int main(int argc, char **argv)
     int arg_count = 0;
     gboolean user_console;
 
+    if (argc == 3 && !strcmp(argv[1], "--identify")) {
+        return identify(argv[2]);
+    }
     while (first_arg < argc) {
-        if (!strcmp(argv[first_arg], "-n")) {
+        if (!strcmp(argv[first_arg], "-h") ||
+            !strcmp(argv[first_arg], "--help")) {
+            usage(argv[0]);
+            return 0;
+        } else if (!strcmp(argv[first_arg], "-n")) {
             dry_run = TRUE;
         } else if (!strcmp(argv[first_arg], "--read-only")) {
             read_only = TRUE;
@@ -293,6 +357,11 @@ int main(int argc, char **argv)
                 return 2;
             }
             dbgprint = argv[++first_arg];
+        } else if (argv[first_arg][0] == '-') {
+            fprintf(stderr, "qemu-clarion: unknown option %s\n",
+                    argv[first_arg]);
+            usage(argv[0]);
+            return 2;
         } else {
             break;
         }
