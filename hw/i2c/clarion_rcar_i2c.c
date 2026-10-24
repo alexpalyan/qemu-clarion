@@ -18,6 +18,10 @@
 #include "qemu/timer.h"
 #include "ui/input.h"
 
+#define CLARION_LOG(mask, fmt, ...) \
+    qemu_log_mask(mask, "virtual-ms=%" PRId64 " " fmt, \
+                  qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), ##__VA_ARGS__)
+
 #define RCAR_I2C4_MMIO_SIZE 0x1000
 #define TMA460_PROFILE_POINT_SIZE 10
 #define TMA460_TOUCH_X_OFFSET 14
@@ -86,6 +90,8 @@ struct ClarionTma460 {
     bool reset_released;
     bool ready_pulsed;
     bool synthetic_profile;
+    bool ist_status_pending;
+    QEMUTimer ist_irq_timer;
     bool system_header_active;
     bool profile_read_active;
     bool mode_write_pending;
@@ -158,6 +164,15 @@ static const uint8_t clarion_tma460_profile_registers[256] = {
     [TMA460_PROFILE_A4 + 8] = 0x0a, /* TARGET: cfg[8] is record stride. */
 };
 
+/* SYNTHETIC: minimum accepted selector-2/3 handshake response fields. */
+static const uint8_t clarion_tma460_profile_handshake_status[10] = {
+    [0] = 0x40,
+};
+static const uint8_t clarion_tma460_profile_handshake_data[0x80] = {
+    [5] = 0x80,
+    [0x1d] = 0x01,
+};
+
 static const uint8_t clarion_tma460_profile_zero[256];
 
 /* One selector/length/data table serves System Mode and working-mode reads. */
@@ -192,9 +207,9 @@ static const ClarionTma460ProfileMap clarion_tma460_profile_map[] = {
     { 0x01, TMA460_PROFILE_MODE_ANY, 1, TMA460_PROFILE_REGISTER_DATA,
       clarion_tma460_profile_zero + 0x01 },
     { 0x02, TMA460_PROFILE_MODE_ANY, 10, TMA460_PROFILE_REGISTER_DATA,
-      clarion_tma460_profile_zero + 0x02 },
+      clarion_tma460_profile_handshake_status },
     { 0x03, TMA460_PROFILE_MODE_ANY, 0x80, TMA460_PROFILE_REGISTER_DATA,
-      clarion_tma460_profile_zero + 0x03 },
+      clarion_tma460_profile_handshake_data },
     { TMA460_PROFILE_A5, TMA460_PROFILE_MODE_WORKING, 1,
       TMA460_PROFILE_REGISTER_DATA,
       clarion_tma460_profile_registers + TMA460_PROFILE_A5 },
@@ -239,6 +254,27 @@ static bool clarion_tma460_pointer_mode_ready(const ClarionTma460 *s)
            s->mode_register == TMA460_PROFILE_MODE_WORKING;
 }
 
+static void clarion_tma460_delayed_ist_irq(void *opaque)
+{
+    ClarionTma460 *s = opaque;
+
+    if (!s->synthetic_profile || !s->reset_released) {
+        return;
+    }
+
+    qemu_irq_raise(s->irq);
+    qemu_irq_lower(s->irq);
+    CLARION_LOG(LOG_UNIMP,
+                  "clarion-tma460: profile delayed IST IRQ pulse\n");
+}
+
+static void clarion_tma460_schedule_ist_irq(ClarionTma460 *s,
+                                            int64_t delay_ms)
+{
+    timer_mod(&s->ist_irq_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + delay_ms);
+}
+
 static void clarion_tma460_pointer_sync_state(ClarionTma460 *s);
 
 static const uint8_t clarion_tma460_enter_active[9] = {
@@ -276,20 +312,20 @@ static int clarion_i2c4_recorder_event(I2CSlave *slave, enum i2c_event event)
         break;
     }
 
-    qemu_log_mask(LOG_UNIMP, "clarion-i2c4-recorder: %s\n", name);
+    CLARION_LOG(LOG_UNIMP, "clarion-i2c4-recorder: %s\n", name);
     return 0;
 }
 
 static int clarion_i2c4_recorder_send(I2CSlave *slave, uint8_t data)
 {
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-i2c4-recorder: send(0x%02x) ACK\n", data);
     return 0;
 }
 
 static uint8_t clarion_i2c4_recorder_recv(I2CSlave *slave)
 {
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-i2c4-recorder: ERROR unexpected recv; B must stop before data\n");
     return 0xff;
 }
@@ -326,7 +362,7 @@ static int clarion_tma460_event(I2CSlave *slave, enum i2c_event event)
         s->profile_read_active = false;
         s->system_header_active = false;
         s->mode_write_pending = false;
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: start(0x24, write)\n");
         break;
     case I2C_START_RECV:
@@ -339,7 +375,7 @@ static int clarion_tma460_event(I2CSlave *slave, enum i2c_event event)
             s->command_len == 1) {
             if (!s->synthetic_profile) {
                 if (s->selector == 0x00) {
-                    qemu_log_mask(LOG_UNIMP,
+                    CLARION_LOG(LOG_UNIMP,
                                   "clarion-tma460: NACK unsupported read request selector=0x00 read_len=16 (length from target callsite; not present on I2C wire) after ExitBootloader response\n");
                     return 1;
                 }
@@ -351,12 +387,12 @@ static int clarion_tma460_event(I2CSlave *slave, enum i2c_event event)
         }
         if (!s->reset_released || !s->selector_valid || s->command_len != 1 ||
             (s->command_pending && !s->response_active)) {
-            qemu_log_mask(LOG_UNIMP,
+            CLARION_LOG(LOG_UNIMP,
                           "clarion-tma460: NACK read start selector=0x%02x write_len=%u\n",
                           s->selector, s->command_len);
             return 1;
         }
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: start(0x24, read) selector=0x%02x write_len=%u command=%s\n",
                       s->selector, s->command_len,
                       s->response_active ? "EnterActiveState" : "selector-read");
@@ -367,7 +403,7 @@ static int clarion_tma460_event(I2CSlave *slave, enum i2c_event event)
                 clarion_tma460_profile_map_find(s->selector, s->mode_register);
 
             if (!entry) {
-                qemu_log_mask(LOG_UNIMP,
+                CLARION_LOG(LOG_UNIMP,
                               "clarion-tma460: NACK unsupported profile selector=0x%02x\n",
                               s->selector);
                 return 1;
@@ -384,15 +420,30 @@ static int clarion_tma460_event(I2CSlave *slave, enum i2c_event event)
         }
         break;
     case I2C_FINISH:
+        if (s->synthetic_profile &&
+            ((s->selector == 0x02 && s->command_len == 2 &&
+              s->command[1] == 0x03) ||
+             (s->selector == 0x03 && s->command_len == 6))) {
+            /* SYNTHETIC: satisfy the driver's bounded handshake completion. */
+            s->ist_status_pending = true;
+            clarion_tma460_schedule_ist_irq(s, 25);
+            CLARION_LOG(LOG_UNIMP,
+                          "clarion-tma460: handshake completion IRQ scheduled\n");
+        }
         if (s->command_valid && s->command_len == sizeof(s->command)) {
             s->command_pending = true;
+            if (s->synthetic_profile && s->command[3] == 0x3b) {
+                s->mode_register = 0x10;
+                s->ist_status_pending = true;
+                /* The driver waits on [+0x1b0] after issuing this command. */
+                clarion_tma460_schedule_ist_irq(s, 30);
+                CLARION_LOG(LOG_UNIMP,
+                              "clarion-tma460: ExitBootloader IST IRQ scheduled\n");
+            }
         }
         if (s->response_active) {
             if (s->command[3] == 0x3b) {
                 s->exit_response_delivered = true;
-                if (s->synthetic_profile) {
-                    s->mode_register = 0x10;
-                }
             }
             s->command_pending = false;
             s->response_active = false;
@@ -406,7 +457,7 @@ static int clarion_tma460_event(I2CSlave *slave, enum i2c_event event)
                 s->response_index == s->response_len) {
                 s->touch_report_pending = false;
                 touch_report_consumed = true;
-                qemu_log_mask(LOG_UNIMP,
+                CLARION_LOG(LOG_UNIMP,
                               "clarion-tma460: touch report consumed\n");
             }
         }
@@ -417,27 +468,27 @@ static int clarion_tma460_event(I2CSlave *slave, enum i2c_event event)
                 (mode == 0x08 || mode == 0x18 || mode == 0x28)) {
                 /* TARGET: §2 register-0 command constants and readback modes. */
                 s->mode_register = mode & 0x70;
-                qemu_log_mask(LOG_UNIMP,
+                s->ist_status_pending = true;
+                CLARION_LOG(LOG_UNIMP,
                               "clarion-tma460: profile register 0 mode write=0x%02x readback=0x%02x\n",
                               s->mode_write_value, s->mode_register);
                 /* TARGET: §2 mode transition wakes event [+0x1ac]. */
-                qemu_irq_raise(s->irq);
-                qemu_irq_lower(s->irq);
-                qemu_log_mask(LOG_UNIMP,
-                              "clarion-tma460: profile mode-change IRQ pulse\n");
+                clarion_tma460_schedule_ist_irq(s, 25);
+                CLARION_LOG(LOG_UNIMP,
+                              "clarion-tma460: profile mode-change IRQ scheduled\n");
             }
             s->mode_write_pending = false;
         }
         if (touch_report_consumed) {
             clarion_tma460_pointer_sync_state(s);
         }
-        qemu_log_mask(LOG_UNIMP, "clarion-tma460: finish\n");
+        CLARION_LOG(LOG_UNIMP, "clarion-tma460: finish\n");
         break;
     case I2C_NACK:
-        qemu_log_mask(LOG_UNIMP, "clarion-tma460: nack\n");
+        CLARION_LOG(LOG_UNIMP, "clarion-tma460: nack\n");
         break;
     default:
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: unimplemented I2C event %d\n",
                       event);
         break;
@@ -450,7 +501,7 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
     ClarionTma460 *s = CLARION_TMA460(slave);
 
     if (!s->reset_released) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: NACK write byte=0x%02x reset_released=0\n",
                       data);
         return 1;
@@ -460,7 +511,7 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
         if (data != 0x00 && data != 0x01 &&
             !(s->synthetic_profile &&
               clarion_tma460_profile_map_find(data, s->mode_register))) {
-            qemu_log_mask(LOG_UNIMP,
+            CLARION_LOG(LOG_UNIMP,
                           "clarion-tma460: NACK unsupported selector=0x%02x\n",
                           data);
             return 1;
@@ -469,7 +520,7 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
         s->selector_valid = true;
         s->command[0] = data;
         s->command_len = 1;
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: selector 0x%02x ACK\n", data);
         return 0;
     }
@@ -482,7 +533,7 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
         s->mode_write_pending = true;
         s->command[1] = data;
         s->command_len = 2;
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: profile register 0 write byte=0x%02x ACK\n",
                       data);
         return 0;
@@ -493,7 +544,7 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
         data == clarion_tma460_profile_handshake_write[s->command_len - 1]) {
         /* TARGET: §2 handshake-enable transaction writes exactly 5 bytes. */
         s->command[s->command_len++] = data;
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: profile handshake selector 0x03 payload[%u]=0x%02x ACK\n",
                       s->command_len - 2, data);
         return 0;
@@ -504,7 +555,7 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
         /* TARGET: §2 handshake-enable transaction writes selector 2 = 3. */
         s->command[1] = data;
         s->command_len = 2;
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: profile handshake selector 0x02 payload=0x03 ACK\n");
         return 0;
     }
@@ -516,7 +567,7 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
     if (s->selector != 0x00 || s->command_len >= sizeof(s->command) ||
         (s->command_len == 3 ? (data != 0x38 && data != 0x3b) :
                                data != expected[s->command_len])) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: NACK command byte[%u]=0x%02x\n",
                       s->command_len, data);
         s->command_valid = false;
@@ -525,11 +576,11 @@ static int clarion_tma460_send(I2CSlave *slave, uint8_t data)
 
     s->command[s->command_len++] = data;
     s->command_valid = s->command_len == sizeof(s->command);
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-tma460: command byte[%u]=0x%02x ACK\n",
                   s->command_len - 1, data);
     if (s->command_valid) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: Enter Active State command accepted\n");
     }
     return 0;
@@ -541,14 +592,14 @@ static uint8_t clarion_tma460_recv(I2CSlave *slave)
 
     if (!s->reset_released || !s->selector_valid ||
         (s->command_len != 1 && !s->command_valid)) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: ERROR read without supported selector\n");
         return 0xff;
     }
 
     if ((s->response_active || s->profile_read_active) &&
         s->response_index >= s->response_len) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: ERROR response overread index=%u\n",
                       s->response_index);
         return 0xff;
@@ -556,7 +607,7 @@ static uint8_t clarion_tma460_recv(I2CSlave *slave)
 
     if (!s->response_active && !s->profile_read_active &&
         s->response_index >= 1) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: ERROR selector response overread index=%u\n",
                       s->response_index);
         return 0xff;
@@ -567,7 +618,12 @@ static uint8_t clarion_tma460_recv(I2CSlave *slave)
             clarion_tma460_profile_map_find(s->selector, s->mode_register);
         uint8_t value = 0;
 
-        if (s->system_header_active && entry && entry->system_header) {
+        if (s->selector == 0x00 && s->response_index == 0 &&
+            s->ist_status_pending) {
+            /* SYNTHETIC: IST accepts 1 before signaling [+0x1ac]/[+0x1b0]. */
+            value = 1;
+            s->ist_status_pending = false;
+        } else if (s->system_header_active && entry && entry->system_header) {
             value = entry->system_header[s->response_index];
         } else if (entry && entry->kind == TMA460_PROFILE_MODE_DATA) {
             value = s->response_index == 0 ? s->mode_register : 0;
@@ -581,7 +637,7 @@ static uint8_t clarion_tma460_recv(I2CSlave *slave)
         } else if (entry && entry->data) {
             value = entry->data[s->response_index];
         }
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: profile read selector=0x%02x response[%u]=0x%02x\n",
                       s->selector, s->response_index, value);
         s->response_index++;
@@ -589,7 +645,7 @@ static uint8_t clarion_tma460_recv(I2CSlave *slave)
     }
 
     /* T143 selector reads and the T144 checked fields are zero. */
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-tma460: read selector=0x%02x response[%u]=0x00\n",
                   s->selector, s->response_index);
     s->response_index++;
@@ -603,14 +659,14 @@ static bool clarion_tma460_emit_touch(ClarionTma460 *s, uint8_t event_id,
     uint16_t y = pointer_y + TMA460_TOUCH_Y_OFFSET;
 
     if (!clarion_tma460_pointer_mode_ready(s)) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: pointer report ignored before working mode (profile=%d exit_response=%d mode=0x%02x)\n",
                       s->synthetic_profile, s->exit_response_delivered,
                       s->mode_register);
         return false;
     }
     if (s->touch_report_pending) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: pointer report deferred while prior report is unread\n");
         return false;
     }
@@ -624,7 +680,7 @@ static bool clarion_tma460_emit_touch(ClarionTma460 *s, uint8_t event_id,
     s->touch_report[5] = event_id << 4; /* TARGET: EVTID occupies bits 5:4. */
     s->touch_report_pending = true;
     s->touch_report_time = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-tma460: pointer report evt=%u x=%d y=%d raw_x=%u raw_y=%u\n",
                   event_id, pointer_x, pointer_y, x, y);
     qemu_irq_raise(s->irq);
@@ -691,7 +747,7 @@ static void clarion_tma460_pointer_sync_state(ClarionTma460 *s)
     if (s->touch_report_pending &&
         qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) - s->touch_report_time >
             TMA460_TOUCH_REPORT_STALE_MS) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: dropping unread touch report\n");
         s->touch_report_pending = false;
         s->reported_button_down = false;
@@ -775,6 +831,8 @@ static void clarion_tma460_instance_init(Object *obj)
 
     s->reset_released = false;
     s->ready_pulsed = false;
+    timer_init_ms(&s->ist_irq_timer, QEMU_CLOCK_VIRTUAL,
+                  clarion_tma460_delayed_ist_irq, s);
     qdev_init_gpio_out(DEVICE(s), &s->irq, 1);
 }
 
@@ -805,11 +863,12 @@ void clarion_tma460_set_reset(DeviceState *dev, bool gpio_level)
     }
     s->reset_released = release;
     s->selector_valid = false;
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-tma460: reset %s (GPIO4.OUTDT bit10=%d)\n",
                   release ? "release" : "assert", gpio_level);
 
     if (!release) {
+        timer_del(&s->ist_irq_timer);
         s->ready_pulsed = false;
         s->exit_response_delivered = false;
         s->pointer_valid = false;
@@ -825,15 +884,21 @@ void clarion_tma460_set_reset(DeviceState *dev, bool gpio_level)
         s->touch_report_pending = false;
         memset(s->touch_report, 0, sizeof(s->touch_report));
         s->mode_register = 0; /* SYNTHETIC: chosen initial register-0 status. */
+        s->ist_status_pending = s->synthetic_profile;
         return;
     }
 
     if (!s->ready_pulsed) {
         s->ready_pulsed = true;
-        qemu_log_mask(LOG_UNIMP,
-                      "clarion-tma460: ready IRQ pulse after reset release\n");
-        qemu_irq_raise(s->irq);
-        qemu_irq_lower(s->irq);
+        s->ist_status_pending = s->synthetic_profile;
+        CLARION_LOG(LOG_UNIMP,
+                      "clarion-tma460: ready IRQ scheduled after reset release\n");
+        if (s->synthetic_profile) {
+            clarion_tma460_schedule_ist_irq(s, 1);
+        } else {
+            qemu_irq_raise(s->irq);
+            qemu_irq_lower(s->irq);
+        }
     }
 }
 
@@ -843,7 +908,7 @@ void clarion_tma460_set_synthetic_profile(DeviceState *dev, bool enabled)
 
     s->synthetic_profile = enabled;
     if (enabled) {
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-tma460: profile enabled\n");
     }
 }
@@ -867,7 +932,7 @@ static void clarion_rcar_i2c4_start(ClarionRcarI2C4State *s)
         s->icmsr |= ICMSR_MNR;
         s->phase = RCAR_I2C4_IDLE;
         s->bus_active = false;
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-i2c4: address phase NACK addr=0x%02x %s\n",
                       address, read ? "read" : "write");
     } else {
@@ -875,7 +940,7 @@ static void clarion_rcar_i2c4_start(ClarionRcarI2C4State *s)
         s->bus_active = true;
         s->phase = read ? RCAR_I2C4_READ_ADDRESS :
                           RCAR_I2C4_WRITE_ADDRESS;
-        qemu_log_mask(LOG_UNIMP,
+        CLARION_LOG(LOG_UNIMP,
                       "clarion-i2c4: address phase ACK addr=0x%02x %s\n",
                       address, read ? "read" : "write");
     }
@@ -906,13 +971,14 @@ static uint64_t clarion_rcar_i2c4_read(void *opaque, hwaddr offset,
         value = s->icrxtx;
         break;
     default:
-        qemu_log_mask(LOG_UNIMP,
-                      "clarion-i2c4: unimplemented read offset=0x%03" HWADDR_PRIx " size=%u\n",
+        CLARION_LOG(LOG_UNIMP,
+                      "clarion-i2c4: unimplemented read offset=0x%03"
+                      HWADDR_PRIx " size=%u\n",
                       offset, size);
         return 0;
     }
 
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-i2c4: read +0x%02" HWADDR_PRIx " = 0x%08x\n",
                   offset, value);
     return value;
@@ -924,7 +990,7 @@ static void clarion_rcar_i2c4_write(void *opaque, hwaddr offset,
     ClarionRcarI2C4State *s = opaque;
     uint32_t v = value;
 
-    qemu_log_mask(LOG_UNIMP,
+    CLARION_LOG(LOG_UNIMP,
                   "clarion-i2c4: write +0x%02" HWADDR_PRIx " = 0x%08x\n",
                   offset, v);
     switch (offset) {
@@ -960,12 +1026,12 @@ static void clarion_rcar_i2c4_write(void *opaque, hwaddr offset,
 
                 if (ret) {
                     s->icmsr |= ICMSR_MNR;
-                    qemu_log_mask(LOG_UNIMP,
+                    CLARION_LOG(LOG_UNIMP,
                                   "clarion-i2c4: ICRXTX send NACK byte=0x%02x\n",
                                   s->icrxtx);
                 } else {
                     s->icmsr |= ICMSR_MDE | ICMSR_MDT;
-                    qemu_log_mask(LOG_UNIMP,
+                    CLARION_LOG(LOG_UNIMP,
                               "clarion-i2c4: W0C MAT -> send ICRXTX=0x%02x; set MDE|MDT\n",
                               s->icrxtx);
                 }
@@ -976,12 +1042,12 @@ static void clarion_rcar_i2c4_write(void *opaque, hwaddr offset,
 
                 if (ret) {
                     s->icmsr |= ICMSR_MNR;
-                    qemu_log_mask(LOG_UNIMP,
+                    CLARION_LOG(LOG_UNIMP,
                                   "clarion-i2c4: MDE|MDT send NACK byte=0x%02x\n",
                                   s->icrxtx);
                 } else {
                     s->icmsr |= ICMSR_MDE | ICMSR_MDT;
-                    qemu_log_mask(LOG_UNIMP,
+                    CLARION_LOG(LOG_UNIMP,
                               "clarion-i2c4: W0C MDE|MDT -> send ICRXTX=0x%02x; set MDE|MDT\n",
                               s->icrxtx);
                 }
@@ -992,14 +1058,14 @@ static void clarion_rcar_i2c4_write(void *opaque, hwaddr offset,
                 s->bus_active = false;
                 s->phase = RCAR_I2C4_IDLE;
                 s->icmsr |= BIT(4); /* MST: write STOP completion. */
-                qemu_log_mask(LOG_UNIMP,
+                CLARION_LOG(LOG_UNIMP,
                               "clarion-i2c4: write FSB completed; set MST\n");
             } else if (s->phase == RCAR_I2C4_READ_ADDRESS && mat_cleared) {
                 s->phase = RCAR_I2C4_READ_DATA_WAIT;
                 s->icrxtx = i2c_recv(s->bus);
                 s->icmsr |= ICMSR_MDR;
                 s->read_last_pending = !!(s->icmcr & BIT(1));
-                qemu_log_mask(LOG_UNIMP,
+                CLARION_LOG(LOG_UNIMP,
                               "clarion-i2c4: read byte supplied=0x%02x; set MDR\n",
                               s->icrxtx);
             }
@@ -1012,13 +1078,13 @@ static void clarion_rcar_i2c4_write(void *opaque, hwaddr offset,
                     s->phase = RCAR_I2C4_IDLE;
                     s->read_last_pending = false;
                     s->icmsr |= BIT(4); /* MST: FSB completion. */
-                    qemu_log_mask(LOG_UNIMP,
+                    CLARION_LOG(LOG_UNIMP,
                                   "clarion-i2c4: FSB completed; set MST\n");
                 } else {
                     s->icrxtx = i2c_recv(s->bus);
                     s->icmsr |= ICMSR_MDR;
                     s->read_last_pending = !!(s->icmcr & BIT(1));
-                    qemu_log_mask(LOG_UNIMP,
+                    CLARION_LOG(LOG_UNIMP,
                                   "clarion-i2c4: MDR clear without FSB -> read byte 0x%02x; set MDR\n",
                                   s->icrxtx);
                 }
@@ -1038,8 +1104,9 @@ static void clarion_rcar_i2c4_write(void *opaque, hwaddr offset,
         s->icrxtx_written = true;
         break;
     default:
-        qemu_log_mask(LOG_UNIMP,
-                      "clarion-i2c4: unimplemented write offset=0x%03" HWADDR_PRIx " value=0x%08x\n",
+        CLARION_LOG(LOG_UNIMP,
+                      "clarion-i2c4: unimplemented write offset=0x%03"
+                      HWADDR_PRIx " value=0x%08x\n",
                       offset, v);
         break;
     }
