@@ -605,8 +605,8 @@ static const DispKeyMap disp_key_map[] = {
     { KEY_T,           0x31,    true,  NO_CODE, NO_CODE },  /* STATUS */
     { KEY_Z,           0x4c,    true,  NO_CODE, NO_CODE },  /* ZERO EMISSION */
     { KEY_O,           0xf0,    true,  NO_CODE, NO_CODE },  /* POWER */
-    { KEY_D,           0x01,    false, NO_CODE, NO_CODE },  /* DAY/NIGHT */
-    { KEY_B,           0x21,    false, 0x20,    0x31 },     /* brightness / display off */
+    { KEY_D,           0x01,    false, 0x20,    0x31 },     /* DAY/NIGHT */
+    { KEY_B,           0x21,    false, NO_CODE, NO_CODE },  /* brightness */
     { KEY_ESC,         NO_CODE, false, 0x30,    0x03 },     /* BACK */
     { KEY_ENTER,       NO_CODE, false, 0x21,    0x10 },     /* TUNE press */
     { KEY_KPENTER,     NO_CODE, false, 0x21,    0x10 },     /* TUNE press */
@@ -616,7 +616,7 @@ static const DispKeyMap disp_key_map[] = {
     { KEY_RIGHTBRACE,  NO_CODE, false, 0x32,    0x20 },     /* SEEK forward */
     { KEY_F1,          NO_CODE, false, 0x13,    0x01 },     /* MENU */
     { KEY_F2,          NO_CODE, false, 0x30,    0x03 },     /* BACK */
-    { KEY_F3,          NO_CODE, false, 0x20,    0x31 },     /* display off */
+    { KEY_F3,          NO_CODE, false, 0x20,    0x31 },     /* DAY/NIGHT */
     { KEY_F4,          NO_CODE, false, 0x00,    0x32 },     /* MAP */
     { KEY_F5,          NO_CODE, false, 0x01,    0x13 },     /* CAMERA */
     { KEY_F6,          NO_CODE, false, 0x03,    0x30 },     /* AUDIO */

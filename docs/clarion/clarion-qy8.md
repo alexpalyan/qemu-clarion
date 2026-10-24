@@ -240,7 +240,7 @@ picks the column (`row` for EUR and USA units, the default).
 | `M` (or `F4`) | MAP | `0x00` | `0x32` |
 | `N` (or `F1`) | MENU | `0x13` | `0x01` |
 | `Esc` (or `F2`) | BACK | `0x30` | `0x03` |
-| `B` (or `F3`) | display off (hold) | `0x20` | `0x31` |
+| `D` (or `F3`) | ☀/☾: day/night; hold: display off | `0x20` | `0x31` |
 | `C` (or `F5`) | CAMERA | `0x01` | `0x13` |
 | `A` (or `F6`) | AUDIO | `0x03` | `0x30` |
 | `[` / `]` (or `F7` / `F8`) | SEEK back / forward | `0x31` / `0x32` | `0x00` / `0x20` |
@@ -248,7 +248,7 @@ picks the column (`row` for EUR and USA units, the default).
 | Up / Down, PageUp / PageDown, mouse wheel | TUNE knob | `0x35` | `0x35` |
 | `=` / `-` | VOL knob | `0x35` | `0x35` |
 | `O` | POWER (VOL knob push) | bare `0x37` frame | bare `0x37` frame |
-| `D` | DAY/NIGHT (QY7 only) | — | — |
+| `B` | brightness (QY7 only) | — | — |
 
 Keys can also be injected over QMP: `qom-set` on `/machine/panel-micom` with
 `key="CODE[,HOLD_MS]"` (hex matrix code, default hold 150 ms) or a raw frame
