@@ -3937,7 +3937,7 @@ static void sgx_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
             sgx_silent = true;
         }
         sgx_report_kick(s);
-        sgx_silent = false;
+        sgx_silent = s->kick_reports == 0;
     }
 }
 
@@ -4150,9 +4150,9 @@ static void clarion_sgx_realize(DeviceState *dev, Error **errp)
                 " undefined\n");
     }
     if (s->nullrender_all) {
-        sgx_fprintf("[sgx] QY8_SGX_NULLRENDER=all: MIRROR-only; dst-sync"
-                " completion for every READY TA command;"
-                " no queue offset is advanced\n");
+        warn_report("clarion-sgx: QY8_SGX_NULLRENDER=all: MIRROR-only;"
+                    " dst-sync completion for every READY TA command;"
+                    " no queue offset is advanced");
     }
 
     sgx_parse_dump(s, getenv("QY8_SGX_DUMP"));
@@ -4174,8 +4174,8 @@ static void clarion_sgx_realize(DeviceState *dev, Error **errp)
         }
     }
     if (s->readback) {
-        sgx_fprintf("[sgx] ⚠ QY8_SGX_READBACK: reads return written values; "
-                "guest-visible behavior CHANGED\n");
+        warn_report("clarion-sgx: QY8_SGX_READBACK: reads return written"
+                    " values; guest-visible behavior CHANGED");
     }
 
     e = getenv("QY8_SGX_HEARTBEAT");
