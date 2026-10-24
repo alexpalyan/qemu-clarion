@@ -7,8 +7,8 @@ refuse to load the program, silently.
 
 | File | CPU, OS | Kernel | Names | Checked on |
 |---|---|---|---|---|
-| `qy7-main.txt` | SH-4, Windows CE 5.0 | main OS kernel in NOR | 1765 | QY7221NL (X112ECNI.100), QY7214NL (X112JANI.141) |
-| `qy7-updater.txt` | SH-4, Windows CE 5.0 | updater kernel on the map card | 1651 | QY7221NL (QSD-357-101), QY7214NL (QSD-398-100) |
+| `qy7-main.txt` | SH-4, Windows CE 5.0 | main OS kernel in NOR | 1765 | QY7201NE (X110ECNI.158), QY7214NL (X112JANI.141), QY7221NL (X112ECNI.100) |
+| `qy7-updater.txt` | SH-4, Windows CE 5.0 | updater kernel on the map card | 1651 | QY7201NE, QY7214NL (QSD-398-100), QY7221NL (QSD-357-101) |
 | `qy8-main.txt` | ARM, Windows CE 6/7 | main OS kernel in NOR | 2207 | QY8202NA, QY8202NC, QY8202PB, QY8252NF (G214), QY8600NE, QY8602NB, QY8652NB (G218) |
 
 Within each row the lists of all checked units are identical, although the
