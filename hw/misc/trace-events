@@ -464,3 +464,13 @@ restore_host_x86_igvm(void) ""
 # clarion_rcan.c
 clarion_rcan_read(uint64_t virtual_ms, uint64_t offset, uint64_t value) "virtual-ms=%" PRIu64 " offset: 0x%03" PRIx64 ", value: 0x%04" PRIx64
 clarion_rcan_write(uint64_t virtual_ms, uint64_t pc, unsigned size, uint64_t offset, uint64_t value) "virtual-ms=%" PRIu64 " pc=0x%08" PRIx64 " size=%u offset: 0x%03" PRIx64 ", value: 0x%04" PRIx64
+
+# clarion_dispmicom.c
+clarion_dispmicom_frame(uint64_t virtual_ms, const char *direction, const char *body) "virtual-ms=%" PRIu64 " dir=%s body=%s"
+clarion_dispmicom_key_ack_timeout(unsigned retries) "key-ack-timeout retries=%u"
+clarion_dispmicom_key_ack_retry(unsigned attempt) "key-ack-retry attempt=%u"
+clarion_dispmicom_key_ack_accepted(unsigned retries) "key-ack accepted retries=%u"
+clarion_dispmicom_key_nak(unsigned retries) "key-nak retries=%u"
+clarion_dispmicom_synthetic_touch(uint64_t virtual_ms, unsigned x, unsigned y, unsigned pressure) "synthetic-touch virtual-ms=%" PRIu64 " x=%u y=%u pressure=%u"
+clarion_dispmicom_panel_key_repeat_suppressed(unsigned code) "panel-key repeat-suppressed code=0x%02x"
+clarion_dispmicom_panel_key(unsigned code, unsigned down) "panel-key code=0x%02x down=%u"

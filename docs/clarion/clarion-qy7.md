@@ -201,3 +201,17 @@ as a power cycle and starts a new child QEMU with the same arguments. A direct
 supervisor. With `--read-only`, NOR and SD qcow2 overlays stay in place across
 the child restart and are removed when the launcher session exits; the NOR
 overlay therefore retains guest flash writes such as clearing BMF.
+
+## Diagnostics
+
+QY7 model protocol traffic is quiet by default. Enable display-micom frames,
+keys, retries, and acknowledgements with:
+
+```sh
+build-release/qemu-clarion --read-only --headless NOR SD \
+    -trace 'clarion_dispmicom_*'
+```
+
+Other guest-driven model diagnostics using `LOG_GUEST_ERROR` are available
+with `-d guest_errors`; this category can be verbose. Launcher messages, unit identification, and real
+errors remain visible without these flags.

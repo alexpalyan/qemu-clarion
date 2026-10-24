@@ -65,6 +65,7 @@
 #include "migration/vmstate.h"
 #include "standard-headers/linux/input-event-codes.h"
 #include "ui/input.h"
+#include "trace.h"
 
 #define DLE     0x10
 #define STX     0x02
@@ -214,9 +215,8 @@ static void disp_trace(const char *direction, const uint8_t *data,
     for (i = 0; i < len; i++) {
         g_string_append_printf(body, "%s%02x", i ? " " : "", data[i]);
     }
-    qemu_log("clarion-dispmicom: trace virtual-ms=%" PRId64
-             " dir=%s body=%s\n", qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL),
-             direction, body->str);
+    trace_clarion_dispmicom_frame(qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL),
+                                  direction, body->str);
 }
 
 static void disp_queue(ClarionDispMicomState *s, const uint8_t *data,
@@ -268,8 +268,7 @@ static void disp_tx_expire(void *opaque)
     if (!s->cur) {
         if (s->awaiting_ack) {
             if (s->ack_retries >= DISP_ACK_RETRIES) {
-                qemu_log("clarion-dispmicom: key-ack-timeout retries=%u\n",
-                         s->ack_retries);
+                trace_clarion_dispmicom_key_ack_timeout(s->ack_retries);
                 disp_frame_free(s->awaiting_ack);
                 s->awaiting_ack = NULL;
                 s->ack_retries = 0;
@@ -282,8 +281,7 @@ static void disp_tx_expire(void *opaque)
             s->awaiting_ack = NULL;
             s->cur_off = 0;
             s->ack_retries++;
-            qemu_log("clarion-dispmicom: key-ack-retry attempt=%u\n",
-                     s->ack_retries);
+            trace_clarion_dispmicom_key_ack_retry(s->ack_retries);
         } else {
             s->cur = g_queue_pop_head(s->frames);
         }
@@ -343,8 +341,7 @@ static void disp_guest_ack(ClarionDispMicomState *s, uint8_t code)
     }
     timer_del(s->tx);
     if (code == ACK) {
-        qemu_log("clarion-dispmicom: key-ack accepted retries=%u\n",
-                 s->ack_retries);
+        trace_clarion_dispmicom_key_ack_accepted(s->ack_retries);
         disp_frame_free(s->awaiting_ack);
         s->awaiting_ack = NULL;
         s->ack_retries = 0;
@@ -352,7 +349,7 @@ static void disp_guest_ack(ClarionDispMicomState *s, uint8_t code)
             disp_arm(s, DISP_GAP_NS);
         }
     } else {
-        qemu_log("clarion-dispmicom: key-nak retries=%u\n", s->ack_retries);
+        trace_clarion_dispmicom_key_nak(s->ack_retries);
         if (s->ack_retries >= DISP_ACK_RETRIES) {
             disp_frame_free(s->awaiting_ack);
             s->awaiting_ack = NULL;
@@ -486,10 +483,9 @@ static void disp_touch_sync(DeviceState *dev)
         return;
     }
     s->touch_dirty = false;
-    qemu_log("clarion-dispmicom: synthetic-touch virtual-ms=%" PRId64
-             " raw=%u,%u down=%u\n",
-             qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), s->touch_x, s->touch_y,
-             s->touch_down);
+    trace_clarion_dispmicom_synthetic_touch(
+        qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), s->touch_x, s->touch_y,
+        s->touch_down);
     disp_trace("synthetic-touch", data + 1, sizeof(data) - 1);
     disp_queue(s, data, sizeof(data));
 }
@@ -705,8 +701,7 @@ static void disp_key_event(DeviceState *dev, QemuConsole *src,
     bit = 1U << i;
     if (evt->key.down) {
         if (s->key_down_mask & bit) {
-            qemu_log("clarion-dispmicom: panel-key repeat-suppressed "
-                     "code=%02x\n", code);
+            trace_clarion_dispmicom_panel_key_repeat_suppressed(code);
             return;
         }
         s->key_down_mask |= bit;
@@ -724,8 +719,7 @@ static void disp_key_event(DeviceState *dev, QemuConsole *src,
         return;
     }
     data[1] = code | (evt->key.down ? KEY_PRESSED : 0);
-    qemu_log("clarion-dispmicom: panel-key code=%02x down=%u\n",
-             code, evt->key.down);
+    trace_clarion_dispmicom_panel_key(code, evt->key.down);
     if (s->key_input) {
         disp_queue_key(s, data, sizeof(data));
     } else {

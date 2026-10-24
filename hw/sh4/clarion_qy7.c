@@ -294,8 +294,9 @@ static void qy7_mcan_key_timer(void *opaque)
         frame[4] = s->mcan_key_code;
         qy7_inject_can(s, 0x681, frame, sizeof(frame));
         s->mcan_key_stage = 0;
-        qemu_log("clarion-qy7: MCAN panel key pair code=%02x\n",
-                 s->mcan_key_code);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "clarion-qy7: MCAN panel key pair code=%02x\n",
+                      s->mcan_key_code);
     }
 }
 
@@ -309,7 +310,9 @@ static void qy7_mcan_key(void *opaque, uint8_t code, bool down)
         return;
     }
     if (s->mcan_key_stage) {
-        qemu_log("clarion-qy7: MCAN panel key busy; ignored code=%02x\n", code);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "clarion-qy7: MCAN panel key busy; ignored code=%02x\n",
+                      code);
         return;
     }
     if (!s->mcan_keyboard_started) {
@@ -393,7 +396,8 @@ static void qy7_set_can_rx(Object *obj, const char *value, Error **errp)
         return;
     }
 
-    qemu_log("clarion-qy7: can-rx inject id=%03x len=%u\n", id, len);
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "clarion-qy7: can-rx inject id=%03x len=%u\n", id, len);
     if (clarion_rcan_inject(s->rcan, id, data, len)) {
         return;
     }

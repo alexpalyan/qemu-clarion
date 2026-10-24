@@ -222,6 +222,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(ClarionSgxState, CLARION_SGX)
  */
 static bool sgx_silent;
 
+#define sgx_fprintf(...) \
+    do { \
+        if (!sgx_silent) { \
+            fprintf(stderr, __VA_ARGS__); \
+        } \
+    } while (0)
+
 static void G_GNUC_PRINTF(1, 2) sgx_pr(const char *fmt, ...)
 {
     va_list ap;
@@ -506,32 +513,34 @@ static void sgx_e2_ta_dispatch(uint32_t pd, ClarionSgxState *s,
         sgx_b2_read32(pd, s->sa[SGX_SA_TA3DCTL] + 0x88, &base, &slot) &&
         sgx_b2_read32(pd, s->sa[SGX_SA_CCBCTL], &wo, &pa) &&
         sgx_b2_read32(pd, s->sa[SGX_SA_CCBCTL] + 4, &ro, &pa)) {
-        fprintf(stderr, "{\"kind\":\"e2_ta_dispatch\",\"kick\":%u,"
+        sgx_fprintf("{\"kind\":\"e2_ta_dispatch\",\"kick\":%u,"
                 "\"kernel_ccb\":{\"slot_dva\":\"0x%08x\","
                 "\"write_offset\":\"0x%08x\",\"read_offset\":\"0x%08x\",\"words\":[",
                 kick, s->sa[SGX_SA_TA3DCTL] + 0x88, wo, ro);
         for (i = 0; i < 8; i++) {
             uint32_t w = 0;
             bool ok = sgx_b2_read32(pd, base + ro * 32 + i * 4, &w, &pa);
-            fprintf(stderr, "%s{\"ok\":%s,\"value\":\"0x%08x\"}",
+            sgx_fprintf("%s{\"ok\":%s,\"value\":\"0x%08x\"}",
                     i ? "," : "", ok ? "true" : "false", w);
         }
-        fprintf(stderr, "]},\"context\":\"0x%08x\",\"context_raw\":\"",
+        sgx_fprintf("]},\"context\":\"0x%08x\",\"context_raw\":\"",
                 context);
         for (i = 0; context && i < 0x48; i += 4) {
             uint32_t w = 0;
             bool ok = sgx_b2_read32(pd, context + i, &w, &pa);
             if (!ok) break;
-            for (j = 0; j < 4; j++) fprintf(stderr, "%02x", (w >> (8*j)) & 0xff);
+            for (j = 0; j < 4; j++) {
+                sgx_fprintf("%02x", (w >> (8 * j)) & 0xff);
+            }
         }
-        fprintf(stderr, "\",\"ta_ccb\":");
+        sgx_fprintf("\",\"ta_ccb\":");
         if (!context) {
-            fprintf(stderr, "null");
+            sgx_fprintf("null");
         } else if (sgx_b2_read32(pd, context + 0x10, &ctxctl, &pa) &&
             sgx_b2_read32(pd, context + 0x0c, &ctxbase, &pa) &&
             sgx_b2_read32(pd, ctxctl, &ctlwo, &pa) &&
             sgx_b2_read32(pd, ctxctl + 4, &ctlro, &pa)) {
-            fprintf(stderr, "{\"ctl_dva\":\"0x%08x\",\"base_dva\":\"0x%08x\","
+            sgx_fprintf("{\"ctl_dva\":\"0x%08x\",\"base_dva\":\"0x%08x\","
                     "\"write_offset\":\"0x%08x\",\"read_offset\":\"0x%08x\",\"commands\":[",
                     ctxctl, ctxbase, ctlwo, ctlro);
             off = ctlro;
@@ -539,13 +548,16 @@ static void sgx_e2_ta_dispatch(uint32_t pd, ClarionSgxState *s,
             for (i = 0; !stop && off != ctlwo && i < 8; i++) {
                 cmd = ctxbase + off;
                 if (!sgx_b2_read32(pd, cmd, &size, &pa)) { stop = 5; break; }
-                if (i) fputc(',', stderr);
-                fprintf(stderr, "{\"offset\":\"0x%08x\",\"raw\":\"", off);
+                if (i && !sgx_silent) {
+                    fputc(',', stderr);
+                }
+                sgx_fprintf("{\"offset\":\"0x%08x\",\"raw\":\"", off);
                 for (j = 0; j < 0x60; j += 4) {
                     uint32_t w = 0;
                     if (!sgx_b2_read32(pd, cmd + j, &w, &pa)) break;
-                    for (unsigned b = 0; b < 4; b++)
-                        fprintf(stderr, "%02x", (w >> (8*b)) & 0xff);
+                    for (unsigned b = 0; b < 4; b++) {
+                        sgx_fprintf("%02x", (w >> (8 * b)) & 0xff);
+                    }
                 }
                 ready = list = pending = sync = syncv = 0;
                 sgx_b2_read32(pd, cmd + 0x50, &ready, &pa);
@@ -554,7 +566,7 @@ static void sgx_e2_ta_dispatch(uint32_t pd, ClarionSgxState *s,
                     if (sgx_b2_read32(pd, list + 0x14, &sync, &pa) && sync)
                         sgx_b2_read32(pd, sync, &syncv, &pa);
                 }
-                fprintf(stderr, "\",\"ready\":\"0x%08x\",\"list\":\"0x%08x\","
+                sgx_fprintf("\",\"ready\":\"0x%08x\",\"list\":\"0x%08x\","
                         "\"pending\":\"0x%08x\",\"sync_dva\":\"0x%08x\","
                         "\"sync_word\":\"0x%08x\",\"size\":\"0x%08x\"}",
                         ready, list, pending, sync, syncv, size);
@@ -563,11 +575,15 @@ static void sgx_e2_ta_dispatch(uint32_t pd, ClarionSgxState *s,
                 if (off > ctlwo || size > ctlwo - off) { stop = 3; break; }
                 off += size;
             }
-            fprintf(stderr, "],\"walk_stop\":%u,\"walk_end\":\"0x%08x\"}", stop, off);
-        } else fprintf(stderr, "null");
-        fprintf(stderr, "}\n");
+            sgx_fprintf("],\"walk_stop\":%u,\"walk_end\":\"0x%08x\"}",
+                        stop, off);
+        } else {
+            sgx_fprintf("null");
+        }
+        sgx_fprintf("}\n");
     } else {
-        fprintf(stderr, "{\"kind\":\"e2_ta_dispatch\",\"kick\":%u,\"read_error\":true}\n", kick);
+        sgx_fprintf("{\"kind\":\"e2_ta_dispatch\",\"kick\":%u,"
+                      "\"read_error\":true}\n", kick);
     }
 }
 
@@ -575,7 +591,7 @@ static void sgx_b2_skip(uint32_t kick, const char *reason, uint32_t dva)
 {
     static const char banner[] = "render completion is SYNTHETIC; no rasterization occurred; pixel contents are undefined";
 
-    fprintf(stderr, "{\"kind\":\"b2_skip\",\"kick\":%u,"
+    sgx_fprintf("{\"kind\":\"b2_skip\",\"kick\":%u,"
             "\"reason\":\"%s\",\"dva\":\"0x%08x\","
             "\"banner\":\"%s\"}\n", kick, reason, dva, banner);
 }
@@ -684,7 +700,7 @@ static bool sgx_b2_complete_cmd(ClarionSgxState *s, uint32_t pd,
     snprintf(chain + used, sizeof(chain) - used,
              "{\"step\":\"sync\",\"dva\":\"0x%08x\",\"pa\":\"0x%08x\",\"before\":\"0x%08x\",\"after\":\"0x%08x\"}]",
              dva, sync_pa, before, after);
-    fprintf(stderr, "{\"kind\":\"b2_write\",\"kick\":%u,"
+    sgx_fprintf("{\"kind\":\"b2_write\",\"kick\":%u,"
             "\"class\":\"TA\",\"class_index\":0,\"image_entry\":\"0x%08x\","
             "\"chain\":%s,\"field_dva\":\"0x%08x\",\"field_pa\":\"0x%08x\","
             "\"before\":\"0x%08x\",\"after\":\"0x%08x\","
@@ -931,7 +947,7 @@ static bool sgx_b2_model_store_conflict(ClarionSgxState *s, uint32_t dva,
     for (i = 0; i < s->nb2_synthetic; i++) {
         ClarionSgxSyntheticWord *sw = &s->b2_synthetic[i];
         if (sw->valid && sgx_b2_store_overlap(pa, size, sw->pa, 4)) {
-            fprintf(stderr,
+            sgx_fprintf(
                     "{\"kind\":\"b2_conflict\",\"kick\":%u,"
                     "\"dva\":\"0x%08x\",\"pa\":\"0x%08x\","
                     "\"reason\":\"model_store_overlaps_synthetic_completion\"}\n",
@@ -963,12 +979,12 @@ static void sgx_report_pd(uint32_t pd_pa)
         }
         ndir++;
         total += n;
-        fprintf(stderr, "[sgx]   PDE[%4u] = %08x  table PA %08x  "
+        sgx_fprintf("[sgx]   PDE[%4u] = %08x  table PA %08x  "
                 "VA %08x..%08x  pages %u\n",
                 i, pde, pt_pa, i << SGX_MMU_PD_SHIFT,
                 (i << SGX_MMU_PD_SHIFT) + 0x3FFFFF, n);
     }
-    fprintf(stderr, "[sgx]   valid PDEs %u, mapped pages %u\n",
+    sgx_fprintf("[sgx]   valid PDEs %u, mapped pages %u\n",
             ndir, total);
 }
 
@@ -979,23 +995,23 @@ static void sgx_report_range(uint32_t pd_pa, const char *what,
     uint32_t off;
 
     len = MIN(len, 0x200);
-    fprintf(stderr, "[sgx]   %s GPU VA %08x, %u bytes:\n", what, va, len);
+    sgx_fprintf("[sgx]   %s GPU VA %08x, %u bytes:\n", what, va, len);
     for (off = 0; off < len; off += 16) {
         uint32_t pa, w[4];
         unsigned k, n = MIN(4, (len - off + 3) / 4);
 
         if (!sgx_translate(pd_pa, va + off, &pa)) {
-            fprintf(stderr, "[sgx]     +0x%03x: unmapped\n", off);
+            sgx_fprintf("[sgx]     +0x%03x: unmapped\n", off);
             continue;
         }
         for (k = 0; k < n; k++) {
             w[k] = sgx_phys_ld32(pa + 4 * k);
         }
-        fprintf(stderr, "[sgx]     +0x%03x (PA %08x):", off, pa);
+        sgx_fprintf("[sgx]     +0x%03x (PA %08x):", off, pa);
         for (k = 0; k < n; k++) {
-            fprintf(stderr, " %08x", w[k]);
+            sgx_fprintf(" %08x", w[k]);
         }
-        fprintf(stderr, "\n");
+        sgx_fprintf("\n");
     }
 }
 
@@ -1047,11 +1063,11 @@ static void sgx_find_target(ClarionSgxState *s, uint32_t pd, uint32_t pds,
     uint32_t field = use && target >= use ? ((target - use) >> 4) & 0xFFF : 0;
     unsigned i, hits = 0;
 
-    fprintf(stderr, "[sgx]   FIND %08x — encodings:", target);
+    sgx_fprintf("[sgx]   FIND %08x — encodings:", target);
     for (i = 0; i < nenc; i++) {
-        fprintf(stderr, " %s=%08x", enc[i].name, enc[i].value);
+        sgx_fprintf(" %s=%08x", enc[i].name, enc[i].value);
     }
-    fprintf(stderr, "\n");
+    sgx_fprintf("\n");
 
     for (i = 0; i < SGX_NREGS; i++) {
         unsigned k;
@@ -1061,7 +1077,7 @@ static void sgx_find_target(ClarionSgxState *s, uint32_t pd, uint32_t pds,
         }
         for (k = 0; k < nenc; k++) {
             if (enc[k].value && s->regs[i] == enc[k].value) {
-                fprintf(stderr, "[sgx]     register +0x%04x = %08x  (%s)\n",
+                sgx_fprintf("[sgx]     register +0x%04x = %08x  (%s)\n",
                         i * 4, s->regs[i], enc[k].name);
                 hits++;
             }
@@ -1096,7 +1112,7 @@ static void sgx_find_target(ClarionSgxState *s, uint32_t pd, uint32_t pds,
                 }
                 for (k = 0; k < nenc; k++) {
                     if (enc[k].value && w == enc[k].value) {
-                        fprintf(stderr, "[sgx]     GPU memory VA %08x = %08x"
+                        sgx_fprintf("[sgx]     GPU memory VA %08x = %08x"
                                 "  (%s)\n", page_va + o, w, enc[k].name);
                         hits++;
                     }
@@ -1108,7 +1124,7 @@ static void sgx_find_target(ClarionSgxState *s, uint32_t pd, uint32_t pds,
                  */
                 if (field && (w & 0xFFFF000F) == 0x0020000F &&
                     ((w >> 4) & 0xFFF) == field) {
-                    fprintf(stderr, "[sgx]     GPU memory VA %08x = %08x"
+                    sgx_fprintf("[sgx]     GPU memory VA %08x = %08x"
                             "  (field[15:4]=%03x, WEAK match)\n",
                             page_va + o, w, field);
                     hits++;
@@ -1116,7 +1132,7 @@ static void sgx_find_target(ClarionSgxState *s, uint32_t pd, uint32_t pds,
             }
         }
     }
-    fprintf(stderr, "[sgx]     matches: %u\n", hits);
+    sgx_fprintf("[sgx]     matches: %u\n", hits);
 }
 
 /*
@@ -1128,7 +1144,7 @@ static void sgx_report_graph(uint32_t pd)
 {
     unsigned i, edges = 0;
 
-    fprintf(stderr, "[sgx]   pointer graph (word = valid device VA):\n");
+    sgx_fprintf("[sgx]   pointer graph (word = valid device VA):\n");
     for (i = 0; i < SGX_MMU_ENTRIES; i++) {
         uint32_t pde = sgx_phys_ld32(pd + 4 * i);
         uint32_t pt_pa;
@@ -1155,13 +1171,13 @@ static void sgx_report_graph(uint32_t pd)
                 if (!w || (w & 3) || !sgx_translate(pd, w, &tgt)) {
                     continue;
                 }
-                fprintf(stderr, "[sgx]     %08x -> %08x (PA %08x)\n",
+                sgx_fprintf("[sgx]     %08x -> %08x (PA %08x)\n",
                         page_va + o, w, tgt);
                 edges++;
             }
         }
     }
-    fprintf(stderr, "[sgx]     edges: %u\n", edges);
+    sgx_fprintf("[sgx]     edges: %u\n", edges);
 }
 
 /* --- PDS program: decoding and execution (public DDK, SGX540) ---------- */
@@ -3914,7 +3930,7 @@ static void sgx_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
              * often as needed.
              */
             if (s->kicks == s->kick_reports + 1) {
-                fprintf(stderr, "[sgx] EVENT_KICK2 #%u — decode suppressed"
+                sgx_fprintf("[sgx] EVENT_KICK2 #%u — decode suppressed"
                         " (QY8_SGX_KICKS=%u); execution continues\n",
                         s->kicks, s->kick_reports);
             }
@@ -4105,7 +4121,8 @@ static void clarion_sgx_realize(DeviceState *dev, Error **errp)
     const char *e;
 
     e = getenv("QY8_SGX_KICKS");
-    s->kick_reports = e ? (uint32_t)atoi(e) : 2;
+    s->kick_reports = e ? (uint32_t)atoi(e) : 0;
+    sgx_silent = s->kick_reports == 0;
     s->readback = getenv("QY8_SGX_READBACK") != NULL;
     e = getenv("QY8_SGX_NULLRENDER");
     s->nullrender = !e || (strcmp(e, "off") && strcmp(e, "0"));
@@ -4118,7 +4135,7 @@ static void clarion_sgx_realize(DeviceState *dev, Error **errp)
     s->core_rev = e ? (uint32_t)strtoul(e, NULL, 0) : SGX_CORE_REVISION_QY8;
     e = getenv("QY8_SGX_CORE_ID");
     s->core_id = e ? (uint32_t)strtoul(e, NULL, 0) : SGX_CORE_ID_UNKNOWN;
-    fprintf(stderr, "[sgx] core identity: EUR_CR_CORE_REVISION = %08x"
+    sgx_fprintf("[sgx] core identity: EUR_CR_CORE_REVISION = %08x"
             " (SGX540 r%u.%u.%u — firmware constant; see header),"
             " EUR_CR_CORE_ID = %08x%s\n",
             s->core_rev,
@@ -4128,12 +4145,12 @@ static void clarion_sgx_realize(DeviceState *dev, Error **errp)
                 ? " ⚠ NO BASIS (no check reads this value)" : "");
 
     if (s->nullrender) {
-        fprintf(stderr, "[sgx] QY8_SGX_NULLRENDER: render completion is"
+        sgx_fprintf("[sgx] QY8_SGX_NULLRENDER: render completion is"
                 " SYNTHETIC; no rasterization occurred; pixel contents are"
                 " undefined\n");
     }
     if (s->nullrender_all) {
-        fprintf(stderr, "[sgx] QY8_SGX_NULLRENDER=all: MIRROR-only; dst-sync"
+        sgx_fprintf("[sgx] QY8_SGX_NULLRENDER=all: MIRROR-only; dst-sync"
                 " completion for every READY TA command;"
                 " no queue offset is advanced\n");
     }
@@ -4149,15 +4166,15 @@ static void clarion_sgx_realize(DeviceState *dev, Error **errp)
          * option does not perform real rasterization.
          */
         if (s->nullrender) {
-            fprintf(stderr, "[sgx] QY8_SGX_EXEC: PDS/USE programs EXECUTE"
+            sgx_fprintf("[sgx] QY8_SGX_EXEC: PDS/USE programs EXECUTE"
                     " (B2 may synthetically complete a sync word)\n");
         } else {
-            fprintf(stderr, "[sgx] QY8_SGX_EXEC: PDS programs EXECUTE"
+            sgx_fprintf("[sgx] QY8_SGX_EXEC: PDS programs EXECUTE"
                     " (effects stay in model state; guest sees no changes)\n");
         }
     }
     if (s->readback) {
-        fprintf(stderr, "[sgx] ⚠ QY8_SGX_READBACK: reads return written values; "
+        sgx_fprintf("[sgx] ⚠ QY8_SGX_READBACK: reads return written values; "
                 "guest-visible behavior CHANGED\n");
     }
 

@@ -440,7 +440,9 @@ bool clarion_rcan_inject(ClarionRcan *s, uint16_t id, const uint8_t *data,
         }
         rcan_log_frame(s, "RX", i, id, data, len);
         rcan_update_irq(s);
-        qemu_log("clarion-rcan: rx id=%03x mailbox=%u len=%u\n", id, i, len);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "clarion-rcan: rx id=%03x mailbox=%u len=%u\n",
+                      id, i, len);
         return true;
     }
     rcan_log_frame(s, "RX", -1, id, data, len);
