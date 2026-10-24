@@ -31,16 +31,21 @@ OBJECT_DECLARE_SIMPLE_TYPE(USBCDCACMState, USB_CDC_ACM)
 #define CDC_ACM_RX_CARRIER (1u << 0)
 #define CDC_ACM_TX_CARRIER (1u << 1)
 #define CDC_ACM_RX_SIZE 8192
-#define CDC_ACM_EP_INTERRUPT 3
-#define CDC_ACM_EP_BULK_IN 1
-#define CDC_ACM_EP_BULK_OUT 2
+#define CDC_ACM_EP_INTERRUPT 4
+#define CDC_ACM_EP_BULK_IN 5
+#define CDC_ACM_EP_BULK_OUT 4
+#define CDC_ACM_EP_SECONDARY_BULK_IN 7
+#define CDC_ACM_EP_SECONDARY_BULK_OUT 5
+#define CDC_ACM_EP_INTERRUPT_SECONDARY 6
 #define CDC_ACM_EP_INTERRUPT_SIZE 64
 #define CDC_ACM_NOTIFICATION_SIZE 10
 
 struct USBCDCACMState {
     USBDevice dev;
     USBEndpoint *intr;
+    USBEndpoint *intr_secondary;
     USBEndpoint *bulk_in;
+    USBEndpoint *bulk_in_secondary;
     CharFrontend chr;
     uint8_t rx_buf[CDC_ACM_RX_SIZE];
     uint32_t rx_head;
@@ -56,73 +61,182 @@ struct USBCDCACMState {
 };
 
 enum {
-    STR_MANUFACTURER = 1,
+    STR_CONFIGURATION = 1,
     STR_PRODUCT,
-    STR_SERIAL,
-    STR_CONFIGURATION,
-    STR_CONTROL_IFACE,
-    STR_DATA_IFACE,
+    STR_MANUFACTURER,
 };
 
 static const USBDescStrings cdc_acm_strings = {
-    [STR_MANUFACTURER] = "Sierra Wireless",
-    [STR_PRODUCT] = "AR7 USB Modem",
-    [STR_SERIAL] = "QY8-TCU",
-    [STR_CONFIGURATION] = "CDC ACM",
-    [STR_CONTROL_IFACE] = "Modem Control",
-    [STR_DATA_IFACE] = "Modem Data",
-};
-
-static const uint8_t cdc_acm_functional_desc[] = {
-    5, 0x24, 0x00, 0x10, 0x01, /* Header: CDC 1.10 */
-    5, 0x24, 0x01, 0x00, 0x01, /* Call Management, data iface 1 */
-    4, 0x24, 0x02, 0x0f,       /* ACM capabilities */
-    5, 0x24, 0x06, 0x00, 0x01, /* Union: control 0, data 1 */
-};
-
-static const USBDescOther cdc_acm_comm_desc[] = {
-    { .length = sizeof(cdc_acm_functional_desc),
-      .data = cdc_acm_functional_desc },
+    [STR_CONFIGURATION] = "Sierra Configuration",
+    [STR_PRODUCT] = "AR8550",
+    [STR_MANUFACTURER] = "Sierra Wireless, Incorporated",
 };
 
 static const USBDescIface cdc_acm_ifaces[] = {
     {
         .bInterfaceNumber = 0,
-        .bNumEndpoints = 1,
-        .bInterfaceClass = USB_CLASS_COMM,
-        .bInterfaceSubClass = 0x88,
-        .bInterfaceProtocol = 1,
-        .iInterface = STR_CONTROL_IFACE,
-        .ndesc = ARRAY_SIZE(cdc_acm_comm_desc),
-        .descs = (USBDescOther *)cdc_acm_comm_desc,
+        .bNumEndpoints = 2,
+        .bInterfaceClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceProtocol = USB_CLASS_VENDOR_SPEC,
         .eps =
             (USBDescEndpoint[]){
                 {
-                    .bEndpointAddress = USB_DIR_IN | CDC_ACM_EP_INTERRUPT,
-                    .bmAttributes = USB_ENDPOINT_XFER_INT,
-                    .wMaxPacketSize = CDC_ACM_EP_INTERRUPT_SIZE,
-                    .bInterval = 16,
+                    .bEndpointAddress = USB_DIR_IN | 1,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_OUT | 1,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
                 },
             },
     },
     {
         .bInterfaceNumber = 1,
         .bNumEndpoints = 2,
-        .bInterfaceClass = USB_CLASS_CDC_DATA,
-        .bInterfaceSubClass = 0,
-        .bInterfaceProtocol = 0,
-        .iInterface = STR_DATA_IFACE,
+        .bInterfaceClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceProtocol = USB_CLASS_VENDOR_SPEC,
         .eps =
             (USBDescEndpoint[]){
                 {
-                    .bEndpointAddress = USB_DIR_OUT | CDC_ACM_EP_BULK_OUT,
+                    .bEndpointAddress = USB_DIR_IN | 2,
                     .bmAttributes = USB_ENDPOINT_XFER_BULK,
-                    .wMaxPacketSize = 64,
+                    .wMaxPacketSize = 512,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_OUT | 2,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+            },
+    },
+    {
+        .bInterfaceNumber = 2,
+        .bNumEndpoints = 2,
+        .bInterfaceClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceProtocol = USB_CLASS_VENDOR_SPEC,
+        .eps =
+            (USBDescEndpoint[]){
+                {
+                    .bEndpointAddress = USB_DIR_IN | 3,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_OUT | 3,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+            },
+    },
+    {
+        .bInterfaceNumber = 3,
+        .bNumEndpoints = 3,
+        .bInterfaceClass = USB_CLASS_COMM,
+        .bInterfaceSubClass = 2,
+        .bInterfaceProtocol = 1,
+        .eps =
+            (USBDescEndpoint[]){
+                {
+                    .bEndpointAddress = USB_DIR_IN | CDC_ACM_EP_INTERRUPT,
+                    .bmAttributes = USB_ENDPOINT_XFER_INT,
+                    .wMaxPacketSize = CDC_ACM_EP_INTERRUPT_SIZE,
+                    .bInterval = 5,
                 },
                 {
                     .bEndpointAddress = USB_DIR_IN | CDC_ACM_EP_BULK_IN,
                     .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_OUT | CDC_ACM_EP_BULK_OUT,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+            },
+    },
+    {
+        .bInterfaceNumber = 4,
+        .bNumEndpoints = 3,
+        .bInterfaceClass = USB_CLASS_COMM,
+        .bInterfaceSubClass = 2,
+        .bInterfaceProtocol = 1,
+        .eps =
+            (USBDescEndpoint[]){
+                {
+                    .bEndpointAddress =
+                        USB_DIR_IN | CDC_ACM_EP_INTERRUPT_SECONDARY,
+                    .bmAttributes = USB_ENDPOINT_XFER_INT,
+                    .wMaxPacketSize = CDC_ACM_EP_INTERRUPT_SIZE,
+                    .bInterval = 5,
+                },
+                {
+                    .bEndpointAddress =
+                        USB_DIR_IN | CDC_ACM_EP_SECONDARY_BULK_IN,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+                {
+                    .bEndpointAddress =
+                        USB_DIR_OUT | CDC_ACM_EP_SECONDARY_BULK_OUT,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+            },
+    },
+    {
+        .bInterfaceNumber = 5,
+        .bNumEndpoints = 3,
+        .bInterfaceClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceProtocol = USB_CLASS_VENDOR_SPEC,
+        .eps =
+            (USBDescEndpoint[]){
+                {
+                    .bEndpointAddress = USB_DIR_IN | 8,
+                    .bmAttributes = USB_ENDPOINT_XFER_INT,
                     .wMaxPacketSize = 64,
+                    .bInterval = 5,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_IN | 9,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_OUT | 6,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+            },
+    },
+    {
+        .bInterfaceNumber = 6,
+        .bNumEndpoints = 3,
+        .bInterfaceClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
+        .bInterfaceProtocol = USB_CLASS_VENDOR_SPEC,
+        .eps =
+            (USBDescEndpoint[]){
+                {
+                    .bEndpointAddress = USB_DIR_IN | 10,
+                    .bmAttributes = USB_ENDPOINT_XFER_INT,
+                    .wMaxPacketSize = 64,
+                    .bInterval = 5,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_IN | 11,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
+                },
+                {
+                    .bEndpointAddress = USB_DIR_OUT | 7,
+                    .bmAttributes = USB_ENDPOINT_XFER_BULK,
+                    .wMaxPacketSize = 512,
                 },
             },
     },
@@ -130,9 +244,9 @@ static const USBDescIface cdc_acm_ifaces[] = {
 
 static const USBDescDevice cdc_acm_device = {
     .bcdUSB = 0x0200,
-    .bDeviceClass = 0xff,
-    .bDeviceSubClass = 0xff,
-    .bDeviceProtocol = 0xff,
+    .bDeviceClass = 0,
+    .bDeviceSubClass = 0,
+    .bDeviceProtocol = 0,
     .bMaxPacketSize0 = 64,
     .bNumConfigurations = 1,
     .confs =
@@ -142,7 +256,7 @@ static const USBDescDevice cdc_acm_device = {
                 .bConfigurationValue = 1,
                 .iConfiguration = STR_CONFIGURATION,
                 .bmAttributes = USB_CFG_ATT_ONE,
-                .bMaxPower = 250,
+                .bMaxPower = 0,
                 .nif = ARRAY_SIZE(cdc_acm_ifaces),
                 .ifs = cdc_acm_ifaces,
             },
@@ -153,10 +267,10 @@ static const USBDesc cdc_acm_desc = {
     .id = {
         .idVendor = 0x1199,
         .idProduct = 0x68ab,
-        .bcdDevice = 0x0100,
+        .bcdDevice = 0x0006,
         .iManufacturer = STR_MANUFACTURER,
         .iProduct = STR_PRODUCT,
-        .iSerialNumber = STR_SERIAL,
+        .iSerialNumber = 0,
     },
     .full = &cdc_acm_device,
     .high = &cdc_acm_device,
@@ -236,6 +350,7 @@ static void cdc_acm_set_serial_state(USBCDCACMState *s, uint16_t state)
                       !!(state & CDC_ACM_RX_CARRIER),
                       !!(state & CDC_ACM_TX_CARRIER), state);
     usb_wakeup(s->intr, 0);
+    usb_wakeup(s->intr_secondary, 0);
 }
 
 static void cdc_acm_get_state(Object *obj, Visitor *v, const char *name,
@@ -300,7 +415,7 @@ static void cdc_acm_handle_control(USBDevice *dev, USBPacket *p, int request,
 
     switch (request) {
     case ClassInterfaceOutRequest | CDC_ACM_SET_LINE_CODING:
-        if (index != 0 || length != 7) {
+        if ((index != 3 && index != 4) || length != 7) {
             goto stall;
         }
         s->baud = ldl_le_p(data);
@@ -315,7 +430,7 @@ static void cdc_acm_handle_control(USBDevice *dev, USBPacket *p, int request,
                           s->baud, s->stop_bits, s->parity, s->data_bits);
         return;
     case ClassInterfaceRequest | CDC_ACM_GET_LINE_CODING:
-        if (index != 0 || length < 7) {
+        if ((index != 3 && index != 4) || length < 7) {
             goto stall;
         }
         stl_le_p(data, s->baud);
@@ -330,7 +445,7 @@ static void cdc_acm_handle_control(USBDevice *dev, USBPacket *p, int request,
                           s->baud, s->stop_bits, s->parity, s->data_bits);
         return;
     case ClassInterfaceOutRequest | CDC_ACM_SET_CONTROL_LINE:
-        if (index != 0) {
+        if (index != 3 && index != 4) {
             goto stall;
         }
         s->dtr = value & 1;
@@ -370,7 +485,8 @@ static void cdc_acm_handle_data(USBDevice *dev, USBPacket *p)
     uint8_t buf[CDC_ACM_RX_SIZE];
     size_t len;
 
-    if (p->pid == USB_TOKEN_OUT && ep == CDC_ACM_EP_BULK_OUT) {
+    if (p->pid == USB_TOKEN_OUT &&
+        (ep == CDC_ACM_EP_BULK_OUT || ep == CDC_ACM_EP_SECONDARY_BULK_OUT)) {
         len = usb_packet_size(p);
         if (len > sizeof(buf)) {
             p->status = USB_RET_STALL;
@@ -383,7 +499,8 @@ static void cdc_acm_handle_data(USBDevice *dev, USBPacket *p)
         return;
     }
 
-    if (p->pid == USB_TOKEN_IN && ep == CDC_ACM_EP_BULK_IN) {
+    if (p->pid == USB_TOKEN_IN &&
+        (ep == CDC_ACM_EP_BULK_IN || ep == CDC_ACM_EP_SECONDARY_BULK_IN)) {
         uint8_t out[CDC_ACM_RX_SIZE];
 
         if (!s->rx_count) {
@@ -402,7 +519,8 @@ static void cdc_acm_handle_data(USBDevice *dev, USBPacket *p)
         return;
     }
 
-    if (p->pid == USB_TOKEN_IN && ep == CDC_ACM_EP_INTERRUPT) {
+    if (p->pid == USB_TOKEN_IN &&
+        (ep == CDC_ACM_EP_INTERRUPT || ep == CDC_ACM_EP_INTERRUPT_SECONDARY)) {
         uint8_t notification[CDC_ACM_NOTIFICATION_SIZE] = {
             0xa1, CDC_ACM_SERIAL_STATE, 0, 0, 0, 0, 2, 0, 0, 0,
         };
@@ -449,6 +567,7 @@ static void cdc_acm_read(void *opaque, const uint8_t *buf, int size)
     s->rx_count += size;
     cdc_acm_log_bytes("chardev_rx", "host_to_guest", buf, size);
     usb_wakeup(s->bulk_in, 0);
+    usb_wakeup(s->bulk_in_secondary, 0);
 }
 
 static void cdc_acm_event(void *opaque, QEMUChrEvent event)
@@ -469,7 +588,11 @@ static void cdc_acm_realize(USBDevice *dev, Error **errp)
         return;
     }
     s->intr = usb_ep_get(dev, USB_TOKEN_IN, CDC_ACM_EP_INTERRUPT);
+    s->intr_secondary =
+        usb_ep_get(dev, USB_TOKEN_IN, CDC_ACM_EP_INTERRUPT_SECONDARY);
     s->bulk_in = usb_ep_get(dev, USB_TOKEN_IN, CDC_ACM_EP_BULK_IN);
+    s->bulk_in_secondary =
+        usb_ep_get(dev, USB_TOKEN_IN, CDC_ACM_EP_SECONDARY_BULK_IN);
     qemu_chr_fe_set_handlers(&s->chr, cdc_acm_can_read, cdc_acm_read,
                              cdc_acm_event, NULL, s, NULL, true);
     cdc_acm_log("attach", ",\"vid\":4505,\"pid\":26795");

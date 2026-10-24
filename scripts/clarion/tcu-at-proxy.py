@@ -30,6 +30,14 @@ def qmp_set_serial_state(path):
 
 def response(command):
     upper = command.upper()
+    if upper in ("ATE0", "ATE0&C1&D2", "ATX4"):
+        return b"\r\nOK\r\n", False
+    if upper == "AT+CMER?" or upper.startswith("AT+CMER="):
+        return b"\r\nOK\r\n", False
+    if upper == "AT+CNUM":
+        return b"\r\nOK\r\n", False
+    if upper == "ATS7=60":
+        return b"\r\nOK\r\n", False
     if upper == "ATI":
         return b"\r\nTCU Gen2 Kai CX.6_RC01\r\nOK\r\n", False
     if upper == "AT+CGDCONT=?":

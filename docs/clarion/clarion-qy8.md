@@ -76,15 +76,26 @@ the same command line is merged with the first.
 
 ### TCU modem model
 
-The optional modem uses VID:PID `1199:68ab`, a CDC communication interface
-with interrupt IN, and a CDC data interface with bulk IN/OUT. Keep it disabled
-unless an AT peer is connected through a QEMU chardev:
+The optional Sierra modem uses VID:PID `1199:68ab` and the observed AR8550
+seven-interface configuration. CDC ACM interfaces 3 and 4 expose interrupt
+IN and bulk IN/OUT endpoints; both route data through the configured QEMU
+chardev. Keep the machine convenience property disabled unless an AT peer is
+connected through a QEMU chardev:
 
 ```sh
 build-release/qemu-system-arm -M clarion-qy8,tcu=on \
     -chardev socket,id=tcu,path=/tmp/qy8-tcu.sock,server=on,wait=off \
     -d guest_errors -D usb-events.log
 ```
+
+The model is a regular `usb-cdc-acm` USB device on `usb-bus.0`; `tcu=on` is a
+machine convenience switch that creates it on the EHCI bus. With `tcu=off`, a
+USB device can instead be attached to the same bus through `-device` or QMP.
+For a physical TCU, use `-device usb-host,vendorid=0x1199,productid=0x68ab,bus=usb-bus.0`
+after the host OS has enumerated the device. A paused-QEMU hotplug check added
+and removed `usb-serial` on `usb-bus.0`; this verifies the QEMU bus path, but
+does not exercise libusb or a physical TCU. The guest was not rebooted during
+that bus check.
 
 The host connects to the socket as a client. Bytes from CDC bulk OUT are sent
 to the chardev; bytes received from the chardev are delivered through bulk IN.
