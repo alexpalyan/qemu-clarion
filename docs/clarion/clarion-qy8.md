@@ -374,3 +374,31 @@ export addresses are fixed virtual addresses and do not require runtime
 relocation. For manual use, `-plugin PATH,image=NOR,out=FILE` performs the
 same scan; `syms=FILE` remains available as a fallback for explicit address
 lists.
+
+## Diagnostics
+
+Normal runs keep model diagnostics out of stderr. QEMU startup errors, real
+model errors, the launcher messages, and the unit/board identification remain
+visible.
+
+| Diagnostic | Enable it with |
+|---|---|
+| SGX kick decode and page-table detail | `QY8_SGX_KICKS=N` (number of initial kicks to report; default `0`) |
+| SGX address/range, graph, shader, and renderer probes | Existing `QY8_SGX_*` options; for SGX address dumps also set `QY8_SGX_KICKS` above zero |
+| Renderer GL call log and frame dumps | `QY8_RENDER_LOG=PATH` and `QY8_RENDER_DUMP_DIR=DIR` |
+| Guest accesses and model events logged with `LOG_GUEST_ERROR` | `-d guest_errors` |
+| Display-micom protocol stream | `-trace 'clarion_dispmicom_*'` |
+
+Examples:
+
+```sh
+# Display-micom protocol
+build-release/qemu-clarion --read-only --headless NOR \
+    -trace 'clarion_dispmicom_*'
+
+# SGX report for the first two kicks
+QY8_SGX_KICKS=2 build-release/qemu-clarion --read-only --headless NOR
+
+# Other guest error events (can be verbose)
+build-release/qemu-clarion --read-only --headless NOR -d guest_errors
+```

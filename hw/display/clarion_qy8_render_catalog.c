@@ -250,7 +250,7 @@ gboolean qy8_render_catalog_ensure(const char *const *names, size_t count,
         entry->base = module->vbase;
         entry->index = i;
         if (!lookup_export(module, names[i], &entry->rva, &entry->word)) {
-            error_report("clarion-qy8-render: export %s missing from %s",
+            error_report_once("clarion-qy8-render: export %s missing from %s",
                          names[i], module->name);
             g_hash_table_remove_all(exports);
             g_free(entry);

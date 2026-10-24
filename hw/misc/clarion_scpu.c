@@ -95,8 +95,10 @@ static void scpu_trace_hide(const char *dir, const uint8_t *data, unsigned len,
             g_string_append_printf(body, "%s%02x", i ? " " : "", data[i]);
         }
     }
-    qemu_log("clarion-scpu: trace virtual-ms=%" PRId64 " dir=%s body=%s\n",
-             qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), dir, body->str);
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "clarion-scpu: trace virtual-ms=%" PRId64
+                  " dir=%s body=%s\n",
+                  qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), dir, body->str);
 }
 
 static void scpu_trace(const char *dir, const uint8_t *data, unsigned len)

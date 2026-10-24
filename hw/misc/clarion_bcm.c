@@ -105,7 +105,8 @@ static bool bcm_load_key(ClarionBcmState *s)
         qemu_log_mask(LOG_GUEST_ERROR, "clarion-bcm: key table not found in "
                       "flash, BCM stays silent\n");
     } else {
-        qemu_log("clarion-bcm: key table located in flash\n");
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "clarion-bcm: key table located in flash\n");
     }
     return s->key_loaded;
 }
