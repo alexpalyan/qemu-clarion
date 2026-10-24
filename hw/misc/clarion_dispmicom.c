@@ -600,11 +600,12 @@ typedef struct DispKeyMap {
 
 static const DispKeyMap disp_key_map[] = {
     /* host            QY7      MCAN   QY8 row  QY8 jpn */
-    { KEY_M,           0x01,    false, 0x00,    0x32 },     /* MAP/VOICE */
+    { KEY_M,           0x0c,    true,  0x00,    0x32 },     /* MAP/VOICE */
     { KEY_N,           0x44,    true,  0x13,    0x01 },     /* MENU */
-    { KEY_P,           0x0c,    true,  NO_CODE, NO_CODE },  /* MAP/VOICE (MCAN) */
     { KEY_T,           0x31,    true,  NO_CODE, NO_CODE },  /* STATUS */
     { KEY_Z,           0x4c,    true,  NO_CODE, NO_CODE },  /* ZERO EMISSION */
+    { KEY_O,           0xf0,    true,  NO_CODE, NO_CODE },  /* POWER */
+    { KEY_D,           0x01,    false, NO_CODE, NO_CODE },  /* DAY/NIGHT */
     { KEY_B,           0x21,    false, 0x20,    0x31 },     /* brightness / display off */
     { KEY_ESC,         NO_CODE, false, 0x30,    0x03 },     /* BACK */
     { KEY_ENTER,       NO_CODE, false, 0x21,    0x10 },     /* TUNE press */

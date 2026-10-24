@@ -259,6 +259,9 @@ static uint8_t qy7_mcan_next_sequence(QY7MachineState *s)
     return s->mcan_sequence;
 }
 
+#define MCAN_CODE_AUDIO_ONOFF 0xf0
+#define MCAN_FUNC_AUDIO_ONOFF 0x20
+
 static void qy7_mcan_key_timer(void *opaque)
 {
     QY7MachineState *s = opaque;
@@ -282,6 +285,16 @@ static void qy7_mcan_key_timer(void *opaque)
     }
     if (s->mcan_key_stage == 1) {
         frame[1] = qy7_mcan_next_sequence(s);
+        if (s->mcan_key_code == MCAN_CODE_AUDIO_ONOFF) {
+            frame[2] = MCAN_FUNC_AUDIO_ONOFF;
+            frame[4] = 0x00;
+            qy7_inject_can(s, 0x681, frame, sizeof(frame));
+            s->mcan_key_stage = 0;
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "clarion-qy7: MCAN audio on/off key code=%02x\n",
+                          s->mcan_key_code);
+            return;
+        }
         frame[4] = s->mcan_key_code | 0x80;
         qy7_inject_can(s, 0x681, frame, sizeof(frame));
         s->mcan_key_stage = 2;
