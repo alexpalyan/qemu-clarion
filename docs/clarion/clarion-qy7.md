@@ -22,7 +22,7 @@ waits for the guest's `DLE ACK` before completing the key event.
 
 | Host key | Panel control | Panel code | Evidence |
 |---|---|---:|---|
-| `M` | MAP/VOICE | `0x01` | Active KEPDRV tables map `01 -> 01 -> 0x22`; frame reaches `AuiKeyEvent`. An early UI run showed the map after M. |
+| `D` | DAY/NIGHT | `0x01` | Active KEPDRV tables map `01 -> 01 -> 0x22`; on the map the guest reports `SK_HWK_DAY_NIGHT_CLICK`. |
 | `B` | Brightness/day-night control (inferred) | `0x21` | Active tables map `21 -> 02 -> 0xD9`; an early UI run showed `Lysstyrke` for this code under the previous host alias `S`. |
 
 Host keys follow one table for QY7 and QY8 (see the QY8 reference, “Panel
@@ -140,7 +140,9 @@ identity was not recovered from the available runtime state.
 These rows record guest-visible mappings from read-only QY7 captures. They do
 not claim physical names for rows without a visible result. QY7 host keyboard
 aliases send the five proven controls through MCAN (`PUSH_SW` for panel navigation keys,
-and `AUDIO_ONOFF` function `0x20` for `POWER`); `M` and `B` retain their existing display-micom behavior.
+and `AUDIO_ONOFF` function `0x20` for `POWER`); `D` and `B` use the display-micom frames above.
+`M` is MAP on both series: on QY7 it sends the MCAN MAP/VOICE key (`P` is an alias), because
+panel code `0x01` is day/night, not MAP.
 
 | Panel control | Hard key | VKey | Verified guest result | Route |
 |---|---:|---:|---|---|
@@ -153,10 +155,14 @@ and `AUDIO_ONOFF` function `0x20` for `POWER`); `M` and `B` retain their existin
 | Host key | Hard key | Panel control |
 |---|---:|---|
 | `N` | `0x44` | MENU |
-| `P` | `0x0C` | MAP/VOICE |
+| `M` (or `P`) | `0x0C` | MAP/VOICE |
 | `T` | `0x31` | STATUS |
 | `Z` | `0x4C` | ZERO EMISSION |
 | `O` | `0xF0` | POWER |
+
+Service menu: on the map, `M M M O O M` (MAP three times, POWER twice, MAP)
+opens the system diagnostic menu (self diagnosis, confirmation/adjustment),
+the documented way into Software Update on these units.
 
 The MCAN keyboard input property is enabled only on QY7. Its first host key
 starts the observed F-frame refresh and sends the observed `E0`/type-2 setup

@@ -248,6 +248,7 @@ picks the column (`row` for EUR and USA units, the default).
 | Up / Down, PageUp / PageDown, mouse wheel | TUNE knob | `0x35` | `0x35` |
 | `=` / `-` | VOL knob | `0x35` | `0x35` |
 | `O` | POWER (VOL knob push) | bare `0x37` frame | bare `0x37` frame |
+| `D` | DAY/NIGHT (QY7 only) | — | — |
 
 Keys can also be injected over QMP: `qom-set` on `/machine/panel-micom` with
 `key="CODE[,HOLD_MS]"` (hex matrix code, default hold 150 ms) or a raw frame
