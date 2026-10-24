@@ -605,6 +605,7 @@ static const DispKeyMap disp_key_map[] = {
     { KEY_P,           0x0c,    true,  NO_CODE, NO_CODE },  /* MAP/VOICE (MCAN) */
     { KEY_T,           0x31,    true,  NO_CODE, NO_CODE },  /* STATUS */
     { KEY_Z,           0x4c,    true,  NO_CODE, NO_CODE },  /* ZERO EMISSION */
+    { KEY_O,           0xf0,    true,  NO_CODE, NO_CODE },  /* POWER */
     { KEY_B,           0x21,    false, 0x20,    0x31 },     /* brightness / display off */
     { KEY_ESC,         NO_CODE, false, 0x30,    0x03 },     /* BACK */
     { KEY_ENTER,       NO_CODE, false, 0x21,    0x10 },     /* TUNE press */

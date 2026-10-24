@@ -28,7 +28,7 @@ waits for the guest's `DLE ACK` before completing the key event.
 Host keys follow one table for QY7 and QY8 (see the QY8 reference, “Panel
 keys and knobs”): the same key presses the same function. On QY7 only the
 codes above and the MCAN routes below are proven; other keys of the table
-(`Esc`, `Enter`, `C`, `A`, `[`/`]`, F1–F9, knobs, `O` power) send nothing here.
+(`Esc`, `Enter`, `C`, `A`, `[`/`]`, F1–F9, knobs) send nothing here.
 
 The active QY7 `kepdrv.dll` table observed after boot has two first-stage
 entries, `01 -> 01` and `21 -> 02`, and two second-stage entries,
@@ -42,7 +42,7 @@ inference from the panel photo.
 MENU, MAP/VOICE, STATUS and Zero Emission also arrive over the vehicle CAN
 bus as MCAN `PUSH_SW` frames; see
 [Verified MCAN PUSH_SW routes](#verified-mcan-push_sw-routes). Codes for
-TUNE/SEEK/CH, FM-AM, XM, CD-AUX, VOL+/VOL−, CAMERA, OPEN/TILT and power have
+TUNE/SEEK/CH, FM-AM, XM, CD-AUX, VOL+/VOL−, CAMERA, and OPEN/TILT have
 not been established. Do not infer codes for them from their labels.
 
 Send a key through QMP in headless mode:
@@ -125,20 +125,22 @@ In the tested headless state, KEPDRV's `AuiKeyEvent` took its `PostMessageW`
 path; its `keybd_event` call site was not reached. Statically, a nonzero
 readiness flag at `ctx+0x64` selects `PostMessageW`; otherwise
 `IsAPIReady(SH_WMGR)` is checked, and when that is false `IsWindowReady`
-selects `keybd_event` for a ready window or `PostMessageW` otherwise. Tested
-`0x37` caused a black display in the observed state; its semantic meaning is
-unknown.
+selects `keybd_event` for a ready window or `PostMessageW` otherwise. Display-micom
+command `0x37` sends `key_code = 0xF0` with `KeyType = 1` in `kepdrv.dll`. On Nissan Leaf
+(`Maker == 2`), the active key table `tbl_158` contains only MAP (`0x01`) and
+Brightness (`0x02`), rejecting `0xF0` as `VK_KEY_NONE`. POWER on QY7 is routed through
+MCAN as `AUDIO_ONOFF` (`20 0d`) instead.
 
 The `PostMessageW` branch targets the HWND stored in KEPDRV's context and
 posts `WM_KEYDOWN`/`WM_KEYUP` with the translated VK. The window's application
 identity was not recovered from the available runtime state.
 
-## Verified MCAN PUSH_SW routes
+## Verified MCAN routes
 
 These rows record guest-visible mappings from read-only QY7 captures. They do
 not claim physical names for rows without a visible result. QY7 host keyboard
-aliases send only the four proven controls through MCAN `PUSH_SW`; `M` and `B`
-retain their existing display-micom behavior.
+aliases send the five proven controls through MCAN (`PUSH_SW` for panel navigation keys,
+and `AUDIO_ONOFF` function `0x20` for `POWER`); `M` and `B` retain their existing display-micom behavior.
 
 | Panel control | Hard key | VKey | Verified guest result | Route |
 |---|---:|---:|---|---|
@@ -146,6 +148,7 @@ retain their existing display-micom behavior.
 | MENU | `0x44` | `0x1C` | Opens `MENY` from the map | MCAN `PUSH_SW` |
 | STATUS | `0x31` | `0x1A` | Opens `Status / Lyd av / Ingen rute` | MCAN `PUSH_SW` |
 | ZERO EMISSION | `0x4C` | `0x1F` | Opens the Zero Emission menu from the map | MCAN `PUSH_SW` |
+| POWER | `0xF0` | `0x05` | Toggles media on/off (`AudioSourceSelect`, audio bar overlay) | MCAN `AUDIO_ONOFF` (`20 0d`) |
 
 | Host key | Hard key | Panel control |
 |---|---:|---|
@@ -153,6 +156,7 @@ retain their existing display-micom behavior.
 | `P` | `0x0C` | MAP/VOICE |
 | `T` | `0x31` | STATUS |
 | `Z` | `0x4C` | ZERO EMISSION |
+| `O` | `0xF0` | POWER |
 
 The MCAN keyboard input property is enabled only on QY7. Its first host key
 starts the observed F-frame refresh and sends the observed `E0`/type-2 setup
