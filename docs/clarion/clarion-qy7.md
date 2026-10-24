@@ -141,7 +141,7 @@ These rows record guest-visible mappings from read-only QY7 captures. They do
 not claim physical names for rows without a visible result. QY7 host keyboard
 aliases send the five proven controls through MCAN (`PUSH_SW` for panel navigation keys,
 and `AUDIO_ONOFF` function `0x20` for `POWER`); `D` and `B` use the display-micom frames above.
-`M` is MAP on both series: on QY7 it sends the MCAN MAP/VOICE key (`P` is an alias), because
+`M` is MAP on both series: on QY7 it sends the MCAN MAP/VOICE key, because
 panel code `0x01` is day/night, not MAP.
 
 | Panel control | Hard key | VKey | Verified guest result | Route |
@@ -155,7 +155,7 @@ panel code `0x01` is day/night, not MAP.
 | Host key | Hard key | Panel control |
 |---|---:|---|
 | `N` | `0x44` | MENU |
-| `M` (or `P`) | `0x0C` | MAP/VOICE |
+| `M` | `0x0C` | MAP/VOICE |
 | `T` | `0x31` | STATUS |
 | `Z` | `0x4C` | ZERO EMISSION |
 | `O` | `0xF0` | POWER |
