@@ -72,7 +72,7 @@
 #define M2DG_F_LINE_IND 0x4000
 #define M2DG_F_WPR_IND 0x0400
 #define M2DG_F_STRANS 0x0800
-#define M2DG_F_INLINE_SRC 0x0080 /* BITBLTA at 0x0e9377f0 uses inline RGB555. */
+#define M2DG_F_SRC_IN_LIST 0x0080 /* Observed on inline BITBLTA and POLY4T. */
 
 /* List registers (byte offsets). */
 #define M2DG_R_SRC 0x4c
@@ -294,6 +294,32 @@ static unsigned clarion_2dg_crossings(const int *vx, const int *vy, unsigned n,
     return k;
 }
 
+static uint16_t clarion_2dg_texel(const uint16_t *tex, unsigned tw, unsigned th,
+                                  int x, int y, int x0, int y0, int xspan,
+                                  int yspan, bool uv_from_quad)
+{
+    int u, v;
+
+    if (uv_from_quad) {
+        u = ((x - x0) * (int)tw) / xspan;
+        v = ((y - y0) * (int)th) / yspan;
+        u = CLAMP(u, 0, (int)tw - 1);
+        v = CLAMP(v, 0, (int)th - 1);
+        return tex[(unsigned)v * tw + (unsigned)u];
+    }
+
+    u = (x - x0) % (int)tw;
+    v = (y - y0) % (int)th;
+
+    if (u < 0) {
+        u += tw;
+    }
+    if (v < 0) {
+        v += th;
+    }
+    return tex[(unsigned)v * tw + (unsigned)u];
+}
+
 /*
  * Fill a polygon; tex (w x h, or NULL) selects texture or solid colour.
  * Even-odd rule by scanline spans; the edges are then drawn one pixel wide
@@ -302,9 +328,11 @@ static unsigned clarion_2dg_crossings(const int *vx, const int *vy, unsigned n,
  */
 static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
                                   unsigned n, uint16_t colour,
-                                  const uint16_t *tex, unsigned tw, unsigned th)
+                                  const uint16_t *tex, unsigned tw, unsigned th,
+                                  bool uv_from_quad)
 {
     int cx0, cy0, cx1, cy1, miny = INT_MAX, maxy = INT_MIN, x, y;
+    int tex_x0 = 0, tex_y0 = 0, tex_xspan = 1, tex_yspan = 1;
     double xs[16];
     unsigned i, k, e;
 
@@ -319,6 +347,15 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
     for (i = 0; i < n; i++) {
         miny = MIN(miny, vy[i]);
         maxy = MAX(maxy, vy[i]);
+    }
+    if (tex && uv_from_quad && n == 4 && tw && th) {
+        tex_x0 = vx[0];
+        tex_y0 = vy[0];
+        tex_xspan = vx[1] - vx[0] + 1;
+        tex_yspan = vy[3] - vy[0] + 1;
+        if (!tex_xspan || !tex_yspan) {
+            return;
+        }
     }
     if (c->rc_on) {
         cx0 = MAX(cx0, c->rx0);
@@ -339,8 +376,12 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
 
             if (!c->path_on) {
                 for (x = xa; x <= xb; x++) {
-                    clarion_2dg_put(c, x, y, tex ? tex[(y % th) * tw + (x % tw)]
-                                                 : colour);
+                    clarion_2dg_put(c, x, y,
+                                    tex ? clarion_2dg_texel(
+                                              tex, tw, th, x, y, tex_x0,
+                                              tex_y0, tex_xspan, tex_yspan,
+                                              uv_from_quad)
+                                        : colour);
                 }
                 continue;
             }
@@ -349,8 +390,12 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
                 int pb = MIN(xb, (int)ceil(c->pxs[e + 1]) - 1);
 
                 for (x = pa; x <= pb; x++) {
-                    clarion_2dg_put(c, x, y, tex ? tex[(y % th) * tw + (x % tw)]
-                                                 : colour);
+                    clarion_2dg_put(c, x, y,
+                                    tex ? clarion_2dg_texel(
+                                              tex, tw, th, x, y, tex_x0,
+                                              tex_y0, tex_xspan, tex_yspan,
+                                              uv_from_quad)
+                                        : colour);
                 }
             }
         }
@@ -368,8 +413,12 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
             if (x0 >= cx0 && x0 <= cx1 && y0 >= cy0 && y0 <= cy1 &&
                 (!c->path_on ||
                  clarion_2dg_in_poly(c->px, c->py, c->path_n, x0, y0))) {
-                clarion_2dg_put(c, x0, y0,
-                                tex ? tex[(y0 % th) * tw + (x0 % tw)] : colour);
+                clarion_2dg_put(
+                    c, x0, y0,
+                    tex ? clarion_2dg_texel(tex, tw, th, x0, y0, tex_x0,
+                                            tex_y0, tex_xspan, tex_yspan,
+                                            uv_from_quad)
+                        : colour);
             }
             if (x0 == x1 && y0 == y1) {
                 break;
@@ -1119,7 +1168,7 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                                       clarion_2dg_xy_y(a2), l + r + 1,
                                       u + d + 1, cx - l, cy - u, a1 & 0xffff);
             } else if (op == M2DG_BITBLTA) {
-                if (w & M2DG_F_INLINE_SRC) {
+                if (w & M2DG_F_SRC_IN_LIST) {
                     clarion_2dg_blit_inline(c, pc, (int32_t)a2, l + r + 1,
                                             u + d + 1, cx - l, cy - u,
                                             w & M2DG_F_STRANS);
@@ -1157,7 +1206,8 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                     goto unknown;
                 }
                 clarion_2dg_shift_xy(c, vx, vy, 4);
-                clarion_2dg_fill_poly(c, vx, vy, 4, a1 & 0xffff, NULL, 0, 0);
+                clarion_2dg_fill_poly(c, vx, vy, 4, a1 & 0xffff, NULL, 0, 0,
+                                      false);
             } else {
                 /* a1 = texture offset (zero uses SRC), a2 = (w << 16 | h). */
                 unsigned tw = a2 >> 16, th = a2 & 0xffff;
@@ -1194,7 +1244,8 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                     } else {
                         /* Captured 0x3b60 uses opaque ARGB1555 texels. */
                         clarion_2dg_shift_xy(c, vx, vy, 4);
-                        clarion_2dg_fill_poly(c, vx, vy, 4, 0, t16, tw, th);
+                        clarion_2dg_fill_poly(c, vx, vy, 4, 0, t16, tw, th,
+                                              w & M2DG_F_SRC_IN_LIST);
                     }
                 }
             }
