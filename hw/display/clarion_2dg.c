@@ -72,6 +72,7 @@
 #define M2DG_F_LINE_IND 0x4000
 #define M2DG_F_WPR_IND 0x0400
 #define M2DG_F_STRANS 0x0800
+#define M2DG_F_INLINE_SRC 0x0080 /* BITBLTA at 0x0e9377f0 uses inline RGB555. */
 
 /* List registers (byte offsets). */
 #define M2DG_R_SRC 0x4c
@@ -451,6 +452,51 @@ static void clarion_2dg_blit(ListCtx *c, int sx, int sy, int w, int h, int dx,
                 continue;
             }
             clarion_2dg_put(c, x, y, v);
+        }
+    }
+}
+
+/* BITBLTA inline RGB555 source; a2 is a signed byte offset from the command. */
+static void clarion_2dg_blit_inline(ListCtx *c, hwaddr pc, int32_t offset,
+                                    int w, int h, int dx, int dy, bool strans)
+{
+    Clarion2DGState *s = c->s;
+    int64_t src_addr = (int64_t)pc + offset;
+    uint16_t key = s->lreg[M2DG_R_STRANS / 4];
+    uint16_t row[CLARION_2DG_MAX_DIM];
+    int cx0, cy0, cx1, cy1, i, j;
+
+    if (src_addr < 0 || !clarion_2dg_dst_map(c) ||
+        !clarion_2dg_clip(c, &cx0, &cy0, &cx1, &cy1) || w <= 0 || h <= 0 ||
+        w > CLARION_2DG_MAX_DIM) {
+        return;
+    }
+    for (j = 0; j < h; j++) {
+        int y = dy + j;
+
+        if (y < cy0 || y > cy1) {
+            continue;
+        }
+        if (address_space_read(&address_space_memory,
+                               src_addr + (hwaddr)j * w * 2,
+                               MEMTXATTRS_UNSPECIFIED, row,
+                               w * 2) != MEMTX_OK) {
+            continue;
+        }
+        for (i = 0; i < w; i++) {
+            int x = dx + i;
+            uint16_t v = le16_to_cpu(row[i]);
+            uint16_t rgb565;
+            unsigned r, g, b;
+
+            if (x < cx0 || x > cx1 || (strans && v == key)) {
+                continue;
+            }
+            r = (v >> 10) & 0x1f;
+            g = (v >> 5) & 0x1f;
+            b = v & 0x1f;
+            rgb565 = (r << 11) | ((g << 1 | g >> 4) << 5) | b;
+            clarion_2dg_put(c, x, y, rgb565);
         }
     }
 }
@@ -1073,9 +1119,16 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                                       clarion_2dg_xy_y(a2), l + r + 1,
                                       u + d + 1, cx - l, cy - u, a1 & 0xffff);
             } else if (op == M2DG_BITBLTA) {
-                clarion_2dg_blit(c, clarion_2dg_xy_x(a2), clarion_2dg_xy_y(a2),
-                                 l + r + 1, u + d + 1, cx - l, cy - u,
-                                 w & M2DG_F_STRANS);
+                if (w & M2DG_F_INLINE_SRC) {
+                    clarion_2dg_blit_inline(c, pc, (int32_t)a2, l + r + 1,
+                                            u + d + 1, cx - l, cy - u,
+                                            w & M2DG_F_STRANS);
+                } else {
+                    clarion_2dg_blit(c, clarion_2dg_xy_x(a2),
+                                     clarion_2dg_xy_y(a2), l + r + 1,
+                                     u + d + 1, cx - l, cy - u,
+                                     w & M2DG_F_STRANS);
+                }
             } else if (clarion_2dg_xform_is_default(s)) {
                 /* a1 = mask origin XY, a2 = source origin XY */
                 clarion_2dg_blit_rot(c, clarion_2dg_xy_x(a2),
