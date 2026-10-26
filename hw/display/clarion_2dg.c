@@ -535,17 +535,11 @@ static void clarion_2dg_blit_inline(ListCtx *c, hwaddr pc, int32_t offset,
         for (i = 0; i < w; i++) {
             int x = dx + i;
             uint16_t v = le16_to_cpu(row[i]);
-            uint16_t rgb565;
-            unsigned r, g, b;
 
             if (x < cx0 || x > cx1 || (strans && v == key)) {
                 continue;
             }
-            r = (v >> 10) & 0x1f;
-            g = (v >> 5) & 0x1f;
-            b = v & 0x1f;
-            rgb565 = (r << 11) | ((g << 1 | g >> 4) << 5) | b;
-            clarion_2dg_put(c, x, y, rgb565);
+            clarion_2dg_put(c, x, y, v);
         }
     }
 }
