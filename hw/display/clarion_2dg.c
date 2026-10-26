@@ -72,6 +72,7 @@
 #define M2DG_F_LINE_IND 0x4000
 #define M2DG_F_WPR_IND 0x0400
 #define M2DG_F_STRANS 0x0800
+#define M2DG_F_SRC_IN_LIST 0x0080 /* Observed on inline BITBLTA and POLY4T. */
 
 /* List registers (byte offsets). */
 #define M2DG_R_SRC 0x4c
@@ -293,6 +294,32 @@ static unsigned clarion_2dg_crossings(const int *vx, const int *vy, unsigned n,
     return k;
 }
 
+static uint16_t clarion_2dg_texel(const uint16_t *tex, unsigned tw, unsigned th,
+                                  int x, int y, int x0, int y0, int xspan,
+                                  int yspan, bool uv_from_quad)
+{
+    int u, v;
+
+    if (uv_from_quad) {
+        u = ((x - x0) * (int)tw) / xspan;
+        v = ((y - y0) * (int)th) / yspan;
+        u = CLAMP(u, 0, (int)tw - 1);
+        v = CLAMP(v, 0, (int)th - 1);
+        return tex[(unsigned)v * tw + (unsigned)u];
+    }
+
+    u = (x - x0) % (int)tw;
+    v = (y - y0) % (int)th;
+
+    if (u < 0) {
+        u += tw;
+    }
+    if (v < 0) {
+        v += th;
+    }
+    return tex[(unsigned)v * tw + (unsigned)u];
+}
+
 /*
  * Fill a polygon; tex (w x h, or NULL) selects texture or solid colour.
  * Even-odd rule by scanline spans; the edges are then drawn one pixel wide
@@ -301,9 +328,11 @@ static unsigned clarion_2dg_crossings(const int *vx, const int *vy, unsigned n,
  */
 static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
                                   unsigned n, uint16_t colour,
-                                  const uint16_t *tex, unsigned tw, unsigned th)
+                                  const uint16_t *tex, unsigned tw, unsigned th,
+                                  bool uv_from_quad)
 {
     int cx0, cy0, cx1, cy1, miny = INT_MAX, maxy = INT_MIN, x, y;
+    int tex_x0 = 0, tex_y0 = 0, tex_xspan = 1, tex_yspan = 1;
     double xs[16];
     unsigned i, k, e;
 
@@ -318,6 +347,15 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
     for (i = 0; i < n; i++) {
         miny = MIN(miny, vy[i]);
         maxy = MAX(maxy, vy[i]);
+    }
+    if (tex && uv_from_quad && n == 4 && tw && th) {
+        tex_x0 = vx[0];
+        tex_y0 = vy[0];
+        tex_xspan = vx[1] - vx[0] + 1;
+        tex_yspan = vy[3] - vy[0] + 1;
+        if (!tex_xspan || !tex_yspan) {
+            return;
+        }
     }
     if (c->rc_on) {
         cx0 = MAX(cx0, c->rx0);
@@ -338,8 +376,12 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
 
             if (!c->path_on) {
                 for (x = xa; x <= xb; x++) {
-                    clarion_2dg_put(c, x, y, tex ? tex[(y % th) * tw + (x % tw)]
-                                                 : colour);
+                    clarion_2dg_put(c, x, y,
+                                    tex ? clarion_2dg_texel(
+                                              tex, tw, th, x, y, tex_x0,
+                                              tex_y0, tex_xspan, tex_yspan,
+                                              uv_from_quad)
+                                        : colour);
                 }
                 continue;
             }
@@ -348,8 +390,12 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
                 int pb = MIN(xb, (int)ceil(c->pxs[e + 1]) - 1);
 
                 for (x = pa; x <= pb; x++) {
-                    clarion_2dg_put(c, x, y, tex ? tex[(y % th) * tw + (x % tw)]
-                                                 : colour);
+                    clarion_2dg_put(c, x, y,
+                                    tex ? clarion_2dg_texel(
+                                              tex, tw, th, x, y, tex_x0,
+                                              tex_y0, tex_xspan, tex_yspan,
+                                              uv_from_quad)
+                                        : colour);
                 }
             }
         }
@@ -367,8 +413,12 @@ static void clarion_2dg_fill_poly(ListCtx *c, const int *vx, const int *vy,
             if (x0 >= cx0 && x0 <= cx1 && y0 >= cy0 && y0 <= cy1 &&
                 (!c->path_on ||
                  clarion_2dg_in_poly(c->px, c->py, c->path_n, x0, y0))) {
-                clarion_2dg_put(c, x0, y0,
-                                tex ? tex[(y0 % th) * tw + (x0 % tw)] : colour);
+                clarion_2dg_put(
+                    c, x0, y0,
+                    tex ? clarion_2dg_texel(tex, tw, th, x0, y0, tex_x0,
+                                            tex_y0, tex_xspan, tex_yspan,
+                                            uv_from_quad)
+                        : colour);
             }
             if (x0 == x1 && y0 == y1) {
                 break;
@@ -446,6 +496,45 @@ static void clarion_2dg_blit(ListCtx *c, int sx, int sy, int w, int h, int dx,
         for (i = 0; i < w; i++) {
             int x = dx + i;
             uint16_t v = lduw_le_p(&row[i]);
+
+            if (x < cx0 || x > cx1 || (strans && v == key)) {
+                continue;
+            }
+            clarion_2dg_put(c, x, y, v);
+        }
+    }
+}
+
+/* BITBLTA inline RGB555 source; a2 is a signed byte offset from the command. */
+static void clarion_2dg_blit_inline(ListCtx *c, hwaddr pc, int32_t offset,
+                                    int w, int h, int dx, int dy, bool strans)
+{
+    Clarion2DGState *s = c->s;
+    int64_t src_addr = (int64_t)pc + offset;
+    uint16_t key = s->lreg[M2DG_R_STRANS / 4];
+    uint16_t row[CLARION_2DG_MAX_DIM];
+    int cx0, cy0, cx1, cy1, i, j;
+
+    if (src_addr < 0 || !clarion_2dg_dst_map(c) ||
+        !clarion_2dg_clip(c, &cx0, &cy0, &cx1, &cy1) || w <= 0 || h <= 0 ||
+        w > CLARION_2DG_MAX_DIM) {
+        return;
+    }
+    for (j = 0; j < h; j++) {
+        int y = dy + j;
+
+        if (y < cy0 || y > cy1) {
+            continue;
+        }
+        if (address_space_read(&address_space_memory,
+                               src_addr + (hwaddr)j * w * 2,
+                               MEMTXATTRS_UNSPECIFIED, row,
+                               w * 2) != MEMTX_OK) {
+            continue;
+        }
+        for (i = 0; i < w; i++) {
+            int x = dx + i;
+            uint16_t v = le16_to_cpu(row[i]);
 
             if (x < cx0 || x > cx1 || (strans && v == key)) {
                 continue;
@@ -1073,9 +1162,16 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                                       clarion_2dg_xy_y(a2), l + r + 1,
                                       u + d + 1, cx - l, cy - u, a1 & 0xffff);
             } else if (op == M2DG_BITBLTA) {
-                clarion_2dg_blit(c, clarion_2dg_xy_x(a2), clarion_2dg_xy_y(a2),
-                                 l + r + 1, u + d + 1, cx - l, cy - u,
-                                 w & M2DG_F_STRANS);
+                if (w & M2DG_F_SRC_IN_LIST) {
+                    clarion_2dg_blit_inline(c, pc, (int32_t)a2, l + r + 1,
+                                            u + d + 1, cx - l, cy - u,
+                                            w & M2DG_F_STRANS);
+                } else {
+                    clarion_2dg_blit(c, clarion_2dg_xy_x(a2),
+                                     clarion_2dg_xy_y(a2), l + r + 1,
+                                     u + d + 1, cx - l, cy - u,
+                                     w & M2DG_F_STRANS);
+                }
             } else if (clarion_2dg_xform_is_default(s)) {
                 /* a1 = mask origin XY, a2 = source origin XY */
                 clarion_2dg_blit_rot(c, clarion_2dg_xy_x(a2),
@@ -1104,7 +1200,8 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                     goto unknown;
                 }
                 clarion_2dg_shift_xy(c, vx, vy, 4);
-                clarion_2dg_fill_poly(c, vx, vy, 4, a1 & 0xffff, NULL, 0, 0);
+                clarion_2dg_fill_poly(c, vx, vy, 4, a1 & 0xffff, NULL, 0, 0,
+                                      false);
             } else {
                 /* a1 = texture offset (zero uses SRC), a2 = (w << 16 | h). */
                 unsigned tw = a2 >> 16, th = a2 & 0xffff;
@@ -1141,7 +1238,8 @@ static unsigned clarion_2dg_run(Clarion2DGState *s, hwaddr list,
                     } else {
                         /* Captured 0x3b60 uses opaque ARGB1555 texels. */
                         clarion_2dg_shift_xy(c, vx, vy, 4);
-                        clarion_2dg_fill_poly(c, vx, vy, 4, 0, t16, tw, th);
+                        clarion_2dg_fill_poly(c, vx, vy, 4, 0, t16, tw, th,
+                                              w & M2DG_F_SRC_IN_LIST);
                     }
                 }
             }
