@@ -59,6 +59,7 @@ the same command line is merged with the first.
 | `can-log` | unset | append CAN frames and mode/filter changes using guest virtual milliseconds |
 | `can-replay` | unset | file of periodic `period_ms ID#DATA` receive frames |
 | `can-rx` | write-only | inject one `ID#DATA` frame at runtime through QMP |
+| `rx-seq` | write-only | schedule `DELAY_MS ID#DATA` frames on the virtual clock |
 | `shcore` | `on` | `on` models synthetic CPUCOM startup and initialization-end; `init` keeps only initialization-end; `off` disables SH modeling |
 | `gps-lat` | `50.4501` | fix latitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
@@ -184,6 +185,19 @@ beginning with `#` are ignored:
 `can-rx` is write-only; set it with QMP after machine initialization. A frame
 with no configured receive mailbox is still recorded in `can-log` with
 `mailbox=-1` and is not delivered to the guest.
+
+`rx-seq` schedules a one-shot sequence through the same receive path. Its
+semicolon-separated items are `DELAY_MS ID#DATA`; each delay is relative to
+the preceding frame, and the first delay starts when `rx-seq` is set. For
+example:
+
+```json
+{"execute":"qom-set","arguments":{"path":"/machine","property":"rx-seq","value":"12 6ac#21414141414141;12 6ac#22414141414141"}}
+```
+
+Only one sequence can be active at a time. A new sequence requested while one
+is pending returns an error. Every frame is delivered by a `QEMU_CLOCK_VIRTUAL`
+timer and recorded in `can-log`.
 
 ## 3. Serial ports and SD cards
 
