@@ -217,13 +217,14 @@ struct RenesasSDHIState {
     uint32_t pos;               /* bytes transferred in current block */
     uint32_t blocks;            /* blocks remaining, including current */
     bool     reading, writing;
+    bool     cmd_deferred;
 };
 
 /* --- helpers ----------------------------------------------------------- */
 
 static bool sdhi_idle(RenesasSDHIState *s)
 {
-    return !s->reading && !s->writing && !s->wire_phase;
+    return !s->reading && !s->writing && !s->wire_phase && !s->cmd_deferred;
 }
 
 static bool sdhi_card_present(RenesasSDHIState *s)
@@ -289,6 +290,7 @@ static void sdhi_abort_data(RenesasSDHIState *s)
     s->pos = 0;
     s->blocks = 0;
     s->info2 &= ~(INFO2_RXRDY | INFO2_TXRQ);
+    s->cmd_deferred = false;
 }
 
 /* --- commands ---------------------------------------------------------- */
@@ -590,6 +592,14 @@ static void sdhi_send_command(RenesasSDHIState *s)
     unsigned response_bits;
 
     if (!s->input_clock_hz) {
+        if (!(s->soft_rst & SOFT_RST_RELEASE)) {
+            return;
+        }
+        if (!(s->clk_ctrl & CLK_SCLKEN)) {
+            s->cmd_deferred = true;
+            return;
+        }
+        s->cmd_deferred = false;
         sdhi_execute_command(s);
         return;
     }
@@ -839,6 +849,11 @@ static void sdhi_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
             sdhi_wire_wait(s, s->wire_phase, s->wire_cycles - cycles, false);
         } else {
             s->clk_ctrl = val;
+            if (!s->input_clock_hz && s->cmd_deferred && (val & CLK_SCLKEN)) {
+                s->cmd_deferred = false;
+                trace_renesas_sdhi_deferred_start(s->unit, s->cmd & CMD_IDX);
+                sdhi_execute_command(s);
+            }
         }
         break;
     case SD_SIZE:           s->size = val;      break;
@@ -995,7 +1010,7 @@ static void sdhi_finalize(Object *obj)
 
 static const VMStateDescription vmstate_renesas_sdhi = {
     .name = "renesas-sdhi",
-    .version_id = 4,
+    .version_id = 5,
     .minimum_version_id = 1,
     .post_load = sdhi_post_load,
     .fields = (const VMStateField[]) {
@@ -1037,6 +1052,7 @@ static const VMStateDescription vmstate_renesas_sdhi = {
         VMSTATE_INT64_V(wire_deadline_ns, RenesasSDHIState, 3),
         VMSTATE_TIMER_PTR_V(wire_timer, RenesasSDHIState, 3),
         VMSTATE_BOOL_V(burst, RenesasSDHIState, 4),
+        VMSTATE_BOOL_V(cmd_deferred, RenesasSDHIState, 5),
         VMSTATE_END_OF_LIST()
     }
 };
