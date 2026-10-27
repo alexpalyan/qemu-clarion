@@ -2916,6 +2916,17 @@ static void qy8_can_rx_set(Object *obj, const char *value, Error **errp)
     object_property_set_str(OBJECT(s->can), "rx", value, errp);
 }
 
+static void qy8_can_rx_seq_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    if (!s->can) {
+        error_setg(errp, "rx-seq is available after QY8 initialization");
+        return;
+    }
+    object_property_set_str(OBJECT(s->can), "rx-seq", value, errp);
+}
+
 static bool qy8_micom_get(Object *obj, Error **errp)
 {
     return QY8_MACHINE(obj)->micom_on;
@@ -3060,6 +3071,9 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_add_str(obj, "can-rx", NULL, qy8_can_rx_set);
     object_property_set_description(obj, "can-rx",
         "inject a CAN frame on QY8 as ID#DATA in hexadecimal");
+    object_property_add_str(obj, "rx-seq", NULL, qy8_can_rx_seq_set);
+    object_property_set_description(obj, "rx-seq",
+        "schedule DELAY_MS ID#DATA frames on the QY8 virtual clock");
     object_property_add_str(obj, "can-replay", NULL, qy8_can_replay_set);
     object_property_set_description(obj, "can-replay",
         "replay period_ms ID#DATA lines from this file");

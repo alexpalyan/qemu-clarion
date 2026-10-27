@@ -144,6 +144,14 @@ typedef struct CanRxReplay {
     uint8_t data[8];
 } CanRxReplay;
 
+typedef struct CanRxSeqFrame {
+    uint32_t delay_ms;
+    uint32_t id;
+    bool ext;
+    uint8_t dlc;
+    uint8_t data[8];
+} CanRxSeqFrame;
+
 struct RenesasCANState {
     SysBusDevice parent_obj;
 
@@ -167,6 +175,12 @@ struct RenesasCANState {
     CanRxReplay *replay;
     int n_replay;
     char *replay_path;
+
+    /* one-shot receive sequence scheduled on the virtual clock */
+    QEMUTimer *rx_seq_timer;
+    CanRxSeqFrame *rx_seq;
+    size_t n_rx_seq;
+    size_t rx_seq_index;
 };
 
 static void can_log(RenesasCANState *s, const char *fmt, ...)
@@ -639,6 +653,96 @@ static void can_rx_set(Object *obj, const char *value, Error **errp)
     can_inject(s, id, ext, dlc, data);
 }
 
+static void can_rx_seq_tick(void *opaque)
+{
+    RenesasCANState *s = opaque;
+    CanRxSeqFrame *frame = &s->rx_seq[s->rx_seq_index++];
+
+    can_inject(s, frame->id, frame->ext, frame->dlc, frame->data);
+    if (s->rx_seq_index == s->n_rx_seq) {
+        g_clear_pointer(&s->rx_seq, g_free);
+        s->n_rx_seq = 0;
+        s->rx_seq_index = 0;
+        return;
+    }
+
+    frame = &s->rx_seq[s->rx_seq_index];
+    timer_mod(s->rx_seq_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + frame->delay_ms);
+}
+
+static void can_rx_seq_set(Object *obj, const char *value, Error **errp)
+{
+    RenesasCANState *s = RENESAS_CAN(obj);
+    gchar **items;
+    size_t count = 0;
+    size_t i;
+    CanRxSeqFrame *frames;
+
+    if (timer_pending(s->rx_seq_timer)) {
+        error_setg(errp, "renesas-can: rx-seq is already active");
+        return;
+    }
+    if (!value || !*value) {
+        error_setg(errp, "renesas-can: rx-seq expects DELAY_MS ID#DATA items");
+        return;
+    }
+
+    items = g_strsplit(value, ";", -1);
+    while (items[count]) {
+        count++;
+    }
+    if (count == 0) {
+        g_strfreev(items);
+        error_setg(errp, "renesas-can: rx-seq must not be empty");
+        return;
+    }
+    frames = g_new0(CanRxSeqFrame, count);
+    for (i = 0; i < count; i++) {
+        gchar *item = g_strstrip(items[i]);
+        gchar *sep = strchr(item, ' ');
+        const char *end;
+        unsigned long delay;
+
+        if (!sep) {
+            error_setg(errp,
+                       "renesas-can: rx-seq expects DELAY_MS ID#DATA items");
+            goto fail;
+        }
+        *sep++ = '\0';
+        sep = g_strstrip(sep);
+        if (qemu_strtoul(item, &end, 10, &delay) || end == item || *end ||
+            delay == 0 || delay > UINT32_MAX ||
+            !can_parse_frame(sep, &frames[i].id, &frames[i].ext,
+                             &frames[i].dlc, frames[i].data)) {
+            error_setg(errp, "renesas-can: invalid rx-seq item '%s %s'",
+                       item, sep);
+            goto fail;
+        }
+        frames[i].delay_ms = delay;
+    }
+    g_strfreev(items);
+    s->rx_seq = frames;
+    s->n_rx_seq = count;
+    s->rx_seq_index = 0;
+    timer_mod(s->rx_seq_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + frames[0].delay_ms);
+    return;
+
+fail:
+    g_free(frames);
+    g_strfreev(items);
+}
+
+static void can_finalize(Object *obj)
+{
+    RenesasCANState *s = RENESAS_CAN(obj);
+
+    timer_del(s->rx_seq_timer);
+    timer_free(s->rx_seq_timer);
+    g_free(s->rx_seq);
+}
+
 static char *can_rx_get(Object *obj, Error **errp)
 {
     return g_strdup("");
@@ -752,7 +856,9 @@ static void can_init(Object *obj)
     RenesasCANState *s = RENESAS_CAN(obj);
 
     s->trace_pc = getenv("QY8_CAN_PC") != NULL;
+    s->rx_seq_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, can_rx_seq_tick, s);
     object_property_add_str(obj, "rx", can_rx_get, can_rx_set);
+    object_property_add_str(obj, "rx-seq", NULL, can_rx_seq_set);
     object_property_add_str(obj, "can-log", NULL, can_log_set);
     object_property_add_str(obj, "can-replay", NULL, can_replay_set);
     memory_region_init_io(&s->iomem, obj, &can_ops, s, "renesas-can",
@@ -791,6 +897,7 @@ static const TypeInfo renesas_can_types[] = {
         .parent        = TYPE_SYS_BUS_DEVICE,
         .instance_size = sizeof(RenesasCANState),
         .instance_init = can_init,
+        .instance_finalize = can_finalize,
         .class_init    = can_class_init,
     },
 };
