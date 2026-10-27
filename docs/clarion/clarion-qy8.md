@@ -72,6 +72,44 @@ the same command line is merged with the first.
 | `i2c4-recorder` | `off` | transaction recorder on I2C4, address `0x24` |
 | `tma460` | `on` | TMA460 touchscreen controller model on I2C4 (requires `i2c4=on`); on the `g214` board a TMA616 at `0x67` instead |
 | `tma460-profile` | `on` | Synthetic TMA460 register profile with pointer-to-touch input |
+| `tcu` | `off` | Attach the experimental Sierra USB CDC ACM modem model to the EHCI bus |
+| `tcu-chardev` | `tcu` | Chardev ID used for modem data when `tcu=on` |
+
+### TCU modem model
+
+The optional Sierra modem uses VID:PID `1199:68ab` and the observed AR8550
+seven-interface configuration. CDC ACM interfaces 3 and 4 expose interrupt
+IN and bulk IN/OUT endpoints; both route data through the configured QEMU
+chardev. Keep the machine convenience property disabled unless an AT peer is
+connected through a QEMU chardev:
+
+```sh
+build-release/qemu-system-arm -M clarion-qy8,tcu=on \
+    -chardev socket,id=tcu,path=/tmp/qy8-tcu.sock,server=on,wait=off \
+    -d guest_errors -D usb-events.log
+```
+
+The model is a regular `usb-cdc-acm` USB device on `usb-bus.0`; `tcu=on` is a
+machine convenience switch that creates it on the EHCI bus. With `tcu=off`, a
+USB device can instead be attached to the same bus through `-device` or QMP.
+For a physical TCU, use `-device usb-host,vendorid=0x1199,productid=0x68ab,bus=usb-bus.0`
+after the host OS has enumerated the device. A paused-QEMU hotplug check added
+and removed `usb-serial` on `usb-bus.0`; this verifies the QEMU bus path, but
+does not exercise libusb or a physical TCU. The guest was not rebooted during
+that bus check.
+
+The host connects to the socket as a client. Bytes from CDC bulk OUT are sent
+to the chardev; bytes received from the chardev are delivered through bulk IN.
+The device logs control transfers, line coding, DTR/RTS, break, bulk traffic,
+and CDC SERIAL_STATE changes with guest virtual time. The JSON records use the
+`LOG_GUEST_ERROR` log category, so `usb-events.log` can also contain other
+guest-error messages; retain lines that begin with a JSON object when building
+a USB JSONL trace.
+
+The current model is experimental. The QY8 Windows CE image has been observed
+to read its descriptors and set the configuration, but it has not yet been
+confirmed to bind its ACM client driver. A matching VID:PID alone does not
+prove that the guest has created a modem port.
 
 ### Board selection
 
@@ -368,8 +406,9 @@ the guest is not redrawn after that.
 
 * The GPU model does not rasterize; GPU-rendered content appears in the
   window only through MIRROR (see the MIRROR section).
-* Not modeled: the CAN bus beyond the controller itself, USB, I2C devices
-  other than the TMA460.
+* Not modeled: the CAN bus beyond the controller itself, USB devices other
+  than the optional experimental TCU CDC ACM model, and I2C devices other
+  than the TMA460.
 
 ## Guest debug output
 

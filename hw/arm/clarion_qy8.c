@@ -59,6 +59,8 @@
 #include "hw/char/clarion_scif.h"
 #include "hw/usb/hcd-ehci.h"
 #include "hw/usb/hcd-ohci.h"
+#include "hw/usb/usb.h"
+#include "chardev/char.h"
 #include "hw/block/flash.h"
 #include "system/block-backend.h"
 #include "system/blockdev.h"
@@ -1766,6 +1768,8 @@ struct Qy8MachineState {
     DeviceState *tma460;
     DeviceState *ehci;
     DeviceState *ohci;
+    bool tcu_on;
+    char *tcu_chardev;
     DeviceState *sgx;         /* PowerVR SGX @0xFCE00000 */
     DeviceState *g2d;
     DeviceState *shcore;
@@ -2014,6 +2018,29 @@ static void qy8_reverse_set(Object *obj, bool value, Error **errp)
 
     s->reverse = value;
     qy8_bctl_set_inputs(s);
+}
+
+static bool qy8_tcu_get(Object *obj, Error **errp)
+{
+    return QY8_MACHINE(obj)->tcu_on;
+}
+
+static void qy8_tcu_set(Object *obj, bool value, Error **errp)
+{
+    QY8_MACHINE(obj)->tcu_on = value;
+}
+
+static char *qy8_tcu_chardev_get(Object *obj, Error **errp)
+{
+    return g_strdup(QY8_MACHINE(obj)->tcu_chardev);
+}
+
+static void qy8_tcu_chardev_set(Object *obj, const char *value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    g_free(s->tcu_chardev);
+    s->tcu_chardev = g_strdup(value);
 }
 
 static char *qy8_render_get(Object *obj, Error **errp)
@@ -2526,6 +2553,22 @@ static void qy8_init(MachineState *machine)
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(s->ohci), 0, QY8_OHCI_BASE, 2);
     sysbus_connect_irq(SYS_BUS_DEVICE(s->ohci), 0,
                        qemu_allocate_irq(qy8_usb_irq, s, 0));
+
+    if (s->tcu_on) {
+        Chardev *chr = qemu_chr_find(s->tcu_chardev);
+        DeviceState *tcu;
+
+        if (!chr) {
+            error_report("clarion-qy8: tcu=on requires chardev '%s'",
+                         s->tcu_chardev);
+            exit(1);
+        }
+        tcu = qdev_new("usb-cdc-acm");
+        qdev_set_id(tcu, g_strdup("qy8-tcu"), &error_fatal);
+        qdev_prop_set_chr(tcu, "chardev", chr);
+        usb_realize_and_unref(USB_DEVICE(tcu),
+                              &SYS_BUS_EHCI(s->ehci)->ehci.bus, &error_fatal);
+    }
 
     /* --- Display Unit: actual QEMU window --- */
     /*
@@ -3050,6 +3093,14 @@ static void qy8_machine_instance_init(Object *obj)
     s->render_dump_dir = g_strdup("");
     s->can_log_path = g_strdup("");
     s->can_replay_path = g_strdup("");
+    s->tcu_chardev = g_strdup("tcu");
+    object_property_add_bool(obj, "tcu", qy8_tcu_get, qy8_tcu_set);
+    object_property_set_description(obj, "tcu",
+        "attach the optional Sierra CDC ACM TCU modem (default off)");
+    object_property_add_str(obj, "tcu-chardev", qy8_tcu_chardev_get,
+                            qy8_tcu_chardev_set);
+    object_property_set_description(obj, "tcu-chardev",
+        "chardev backend for the optional TCU modem (default: tcu)");
     object_property_add_str(obj, "render", qy8_render_get, qy8_render_set);
     object_property_set_description(obj, "render",
         "render backend: cpu, angle, or off");
