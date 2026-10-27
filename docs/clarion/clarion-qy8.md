@@ -211,6 +211,8 @@ SCIF4 and SCIF1 are taken by the built-in models.
 -drive if=sd,index=0,format=raw,file=sd.img    # front slot; index=1 is the second one
 ```
 
+**SDHI clock gating (SCLKEN).** On real hardware, SDHI commands and bus operations require an active SD clock (`SD_CLK_CTRL.SCLKEN = 1`, bit 8). The bootloader enables `SCLKEN` only for the duration of each command/transfer and clears it (`0x0001`) immediately afterwards. In the unclocked mode (`input-clock-hz` unset, used by `clarion-qy8`), any SD command issued while `SCLKEN = 0` is deferred until the guest writes `SD_CLK_CTRL` with `SCLKEN = 1`. A deferred command start triggers the trace event `renesas_sdhi_deferred_start`.
+
 ## 4. Pointer input
 
 With `tma460-profile=on`, pointer events are reported only after the

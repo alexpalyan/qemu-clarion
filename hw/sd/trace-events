@@ -80,6 +80,7 @@ aspeed_sdhci_write(uint64_t addr, uint32_t size, uint64_t data) "@0x%" PRIx64 " 
 renesas_sdhi_read(uint8_t unit, uint64_t off, unsigned size, uint64_t val) "SDHI%u +0x%02" PRIx64 " (%u) -> 0x%04" PRIx64
 renesas_sdhi_write(uint8_t unit, uint64_t off, unsigned size, uint64_t val) "SDHI%u +0x%02" PRIx64 " (%u) <- 0x%04" PRIx64
 renesas_sdhi_command(uint8_t unit, unsigned idx, uint32_t arg, uint16_t cmdreg) "SDHI%u CMD%02u arg 0x%08" PRIx32 " SD_CMD 0x%04x"
+renesas_sdhi_deferred_start(uint8_t unit, unsigned idx) "SDHI%u CMD%02u deferred start on SCLKEN=1"
 renesas_sdhi_timeout(uint8_t unit, unsigned idx) "SDHI%u CMD%02u timed out -> CMDTIMEOUT"
 renesas_sdhi_irq(uint8_t unit, int level) "SDHI%u line %d"
 renesas_sdhi_inserted(uint8_t unit, bool inserted) "SDHI%u card %d"
