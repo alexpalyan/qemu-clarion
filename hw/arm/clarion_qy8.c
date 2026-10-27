@@ -1811,6 +1811,7 @@ struct Qy8MachineState {
     char *render_dump_dir;
     char *can_log_path;
     char *can_replay_path;
+    bool tcu_auto_reply;
 
     MemoryRegion flash;          /* only when flash is provided as ROM */
     DriveInfo *flash_drive;      /* -drive if=pflash: writable copy */
@@ -2664,6 +2665,8 @@ static void qy8_init(MachineState *machine)
      */
     if (g_strcmp0(getenv("QY8_CAN"), "off") != 0) {
         s->can = qdev_new(TYPE_RENESAS_CAN);
+        object_property_set_bool(OBJECT(s->can), "tcu-auto-reply",
+                                 s->tcu_auto_reply, &error_fatal);
         if (*s->can_log_path) {
             object_property_set_str(OBJECT(s->can), "can-log",
                                     s->can_log_path, &error_fatal);
@@ -2927,6 +2930,21 @@ static void qy8_can_rx_seq_set(Object *obj, const char *value, Error **errp)
     object_property_set_str(OBJECT(s->can), "rx-seq", value, errp);
 }
 
+static bool qy8_tcu_auto_reply_get(Object *obj, Error **errp)
+{
+    return QY8_MACHINE(obj)->tcu_auto_reply;
+}
+
+static void qy8_tcu_auto_reply_set(Object *obj, bool value, Error **errp)
+{
+    Qy8MachineState *s = QY8_MACHINE(obj);
+
+    s->tcu_auto_reply = value;
+    if (s->can) {
+        object_property_set_bool(OBJECT(s->can), "tcu-auto-reply", value, errp);
+    }
+}
+
 static bool qy8_micom_get(Object *obj, Error **errp)
 {
     return QY8_MACHINE(obj)->micom_on;
@@ -3050,6 +3068,7 @@ static void qy8_machine_instance_init(Object *obj)
     s->render_dump_dir = g_strdup("");
     s->can_log_path = g_strdup("");
     s->can_replay_path = g_strdup("");
+    s->tcu_auto_reply = false;
     object_property_add_str(obj, "render", qy8_render_get, qy8_render_set);
     object_property_set_description(obj, "render",
         "render backend: cpu, angle, or off");
@@ -3074,6 +3093,11 @@ static void qy8_machine_instance_init(Object *obj)
     object_property_add_str(obj, "rx-seq", NULL, qy8_can_rx_seq_set);
     object_property_set_description(obj, "rx-seq",
         "schedule DELAY_MS ID#DATA frames on the QY8 virtual clock");
+    object_property_add_bool(obj, "tcu-auto-reply",
+                             qy8_tcu_auto_reply_get,
+                             qy8_tcu_auto_reply_set);
+    object_property_set_description(obj, "tcu-auto-reply",
+        "enable the virtual-time QY8 TCU response policy (default off)");
     object_property_add_str(obj, "can-replay", NULL, qy8_can_replay_set);
     object_property_set_description(obj, "can-replay",
         "replay period_ms ID#DATA lines from this file");

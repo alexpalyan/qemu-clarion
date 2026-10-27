@@ -60,6 +60,7 @@ the same command line is merged with the first.
 | `can-replay` | unset | file of periodic `period_ms ID#DATA` receive frames |
 | `can-rx` | write-only | inject one `ID#DATA` frame at runtime through QMP |
 | `rx-seq` | write-only | schedule `DELAY_MS ID#DATA` frames on the virtual clock |
+| `tcu-auto-reply` | `off` | respond to HU CAN records using the virtual-time TCU test policy |
 | `shcore` | `on` | `on` models synthetic CPUCOM startup and initialization-end; `init` keeps only initialization-end; `off` disables SH modeling |
 | `gps-lat` | `50.4501` | fix latitude in decimal degrees; writable at runtime with `qom-set` |
 | `gps-lon` | `30.5234` | fix longitude in decimal degrees; writable at runtime with `qom-set` |
@@ -198,6 +199,15 @@ example:
 Only one sequence can be active at a time. A new sequence requested while one
 is pending returns an error. Every frame is delivered by a `QEMU_CLOCK_VIRTUAL`
 timer and recorded in `can-log`.
+
+`tcu-auto-reply=on` enables an opt-in policy responder for standard HU frames
+on CAN ID `0x62c`. Each response is delivered to ID `0x6ac` two virtual
+milliseconds after its trigger and is tagged `source=tcu-auto-reply` in
+`can-log`. A single-frame HU message receives `e0 <marker>`; a first frame
+receives ISO-TP CTS flow control (`30 00 00 ff ff ff ff ff`), and completion
+of its consecutive-frame message receives `e0 <first-frame marker>`. The HU
+heartbeat `f0 23 0a 01 …` receives `f0 23 0a 02 00 00 00 00`. The default is
+off, so existing CAN behavior is unchanged unless explicitly enabled.
 
 ## 3. Serial ports and SD cards
 
