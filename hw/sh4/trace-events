@@ -3,5 +3,6 @@ sh7750_porta(uint16_t prev, uint16_t cur, uint16_t pdtr, uint16_t pctr) "porta c
 sh7750_portb(uint16_t prev, uint16_t cur, uint16_t pdtr, uint16_t pctr) "portb changed from 0x%04x to 0x%04x (pdtrb=0x%04x, pctrb=0x%08x)"
 
 # clarion_qy7_wdt.c
-qy7_wdt_timeout(bool manual_reset, uint32_t pclk_hz, uint32_t wdtst, uint32_t wtbst) "watchdog timeout (manual_reset=%d pclk=%u Hz wdtst=0x%x wtbst=0x%x)"
-qy7_wdt_feed(uint32_t wdtst, uint32_t wtbst) "watchdog feed (wdtst=0x%x wtbst=0x%x)"
+qy7_wdt_timeout(uint64_t guest_ns, bool manual_reset, uint32_t pclk_hz, uint32_t wdtst, uint32_t wtbst) "watchdog timeout (guest_ns=%" PRIu64 " ns manual_reset=%d pclk=%u Hz wdtst=0x%x wtbst=0x%x)"
+qy7_wdt_feed(uint64_t guest_ns, uint32_t wdtst, uint32_t wtbst) "watchdog feed (guest_ns=%" PRIu64 " ns wdtst=0x%x wtbst=0x%x)"
+qy7_wdt_wtcsr_write(uint64_t guest_ns, uint32_t value) "WTCSR write (guest_ns=%" PRIu64 " ns value=0x%x)"

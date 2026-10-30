@@ -116,7 +116,8 @@ static void qy7_wdt_expire(ClarionQy7WdtState *s)
     s->wtcsr |= QY7_WDT_WOVF;
     s->overflow_pending = true;
     timer_del(s->timer);
-    trace_qy7_wdt_timeout(manual_reset, s->pclk_hz, s->wdtst, s->wtbst);
+    trace_qy7_wdt_timeout(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL),
+                          manual_reset, s->pclk_hz, s->wdtst, s->wtbst);
 
     /*
      * Both reset selections restart QY7 at its IPL vector in this model.
@@ -284,6 +285,7 @@ static void qy7_wdt_write(void *opaque, hwaddr offset, uint64_t value,
     case QY7_WDT_WTCSR:
         old_wtcsr = s->wtcsr;
         s->wtcsr = value & QY7_WDT_WTCSR_MASK;
+        trace_qy7_wdt_wtcsr_write(now_ns, value);
         if (!(s->wtcsr & QY7_WDT_TME) || !(old_wtcsr & QY7_WDT_TME)) {
             s->last_update_ns = now_ns;
             s->pclk_fraction = 0;
@@ -294,7 +296,7 @@ static void qy7_wdt_write(void *opaque, hwaddr offset, uint64_t value,
         s->wdtbcnt = 0;
         s->last_update_ns = now_ns;
         s->pclk_fraction = 0;
-        trace_qy7_wdt_feed(s->wdtst, s->wtbst);
+        trace_qy7_wdt_feed(now_ns, s->wdtst, s->wtbst);
         break;
     }
     qy7_wdt_schedule(s);
