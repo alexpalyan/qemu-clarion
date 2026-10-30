@@ -6,6 +6,7 @@ sh4_ss.add(when: 'CONFIG_SH7750', if_true: files(
 sh4_ss.add(when: 'CONFIG_R2D', if_true: files('r2d.c'))
 sh4_ss.add(when: 'CONFIG_CLARION_QY7', if_true: files(
   'clarion_qy7.c',
+  'clarion_qy7_wdt.c',
   'clarion_sh4_core.c',
 ))
 
