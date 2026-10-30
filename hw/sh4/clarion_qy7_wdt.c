@@ -294,6 +294,7 @@ static void qy7_wdt_write(void *opaque, hwaddr offset, uint64_t value,
         s->wdtbcnt = 0;
         s->last_update_ns = now_ns;
         s->pclk_fraction = 0;
+        trace_qy7_wdt_feed(s->wdtst, s->wtbst);
         break;
     }
     qy7_wdt_schedule(s);

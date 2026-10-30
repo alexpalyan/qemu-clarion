@@ -4,3 +4,4 @@ sh7750_portb(uint16_t prev, uint16_t cur, uint16_t pdtr, uint16_t pctr) "portb c
 
 # clarion_qy7_wdt.c
 qy7_wdt_timeout(bool manual_reset, uint32_t pclk_hz, uint32_t wdtst, uint32_t wtbst) "watchdog timeout (manual_reset=%d pclk=%u Hz wdtst=0x%x wtbst=0x%x)"
+qy7_wdt_feed(uint32_t wdtst, uint32_t wtbst) "watchdog feed (wdtst=0x%x wtbst=0x%x)"
