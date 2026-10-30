@@ -819,9 +819,9 @@ static void qy7_init(MachineState *machine)
 
 static void qy7_machine_init(MachineClass *mc)
 {
-    mc->desc = "Clarion QY7 (SH7785)";
+    mc->desc = "Clarion QY7 (SH-4A hardware profile)";
     mc->init = qy7_init;
-    mc->default_cpu_type = TYPE_SH7785_CPU;
+    mc->default_cpu_type = TYPE_QY7_CPU;
     mc->ignore_memory_transaction_failures = true;
 }
 

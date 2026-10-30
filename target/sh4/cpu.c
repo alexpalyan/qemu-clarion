@@ -258,6 +258,16 @@ static void sh7785_class_init(ObjectClass *oc, const void *data)
     scc->cvr = 0x71440211;
 }
 
+static void qy7_class_init(ObjectClass *oc, const void *data)
+{
+    (void)data;
+    SuperHCPUClass *scc = SUPERH_CPU_CLASS(oc);
+
+    scc->pvr = 0x10300800;
+    scc->prr = 0x00001f00;
+    scc->cvr = 0x71440211;
+}
+
 static void superh_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
@@ -372,6 +382,8 @@ static const TypeInfo superh_cpu_type_infos[] = {
     DEFINE_SUPERH_CPU_TYPE(TYPE_SH7751R_CPU, sh7751r_class_init,
                            sh7751r_cpu_initfn),
     DEFINE_SUPERH_CPU_TYPE(TYPE_SH7785_CPU, sh7785_class_init,
+                           sh7785_cpu_initfn),
+    DEFINE_SUPERH_CPU_TYPE(TYPE_QY7_CPU, qy7_class_init,
                            sh7785_cpu_initfn),
 
 };
