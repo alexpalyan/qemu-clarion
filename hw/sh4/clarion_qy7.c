@@ -53,6 +53,15 @@
  * 2625000 * 16 Hz. Taken from the guest, not measured on a board.
  */
 #define QY7_TMU_CLOCK 42000000
+/*
+ * QY-7201N-A Hardware Manual p. 41 documents EXTAL = 24 MHz, but not the
+ * QY7 WDT Pck. Use EXTAL as an explicit provisional proxy. With WDTST=0x191
+ * and WTBST=0, the SH7785 formula gives about 4.38 s at 24 MHz; the inferred
+ * 42.1 MHz P-clock would give about 2.51 s, shorter than the measured WinCE
+ * feed interval of about 3.001 s. The SH77722 timer needs the step 7b marker
+ * measurement before its exact clock can be claimed.
+ */
+#define QY7_WDT_PCLK 24000000
 #define QY7_SCIF_BASE 0xffe46000
 /*
  * serial_scif.dll keeps a table of eight SCIF channels at 0xffe40000 +
@@ -83,6 +92,8 @@
 typedef struct QY7MachineState {
     MachineState parent_obj;
     uint8_t dipsw;
+    uint32_t wdt_pclk_hz;
+    bool wdt_enabled;
     uint16_t status0_inputs;
     bool extint_model;
     bool paired_card;
@@ -162,6 +173,8 @@ static void qy7_machine_instance_init(Object *obj)
     QY7MachineState *s = (QY7MachineState *)obj;
 
     s->dipsw = 7;
+    s->wdt_pclk_hz = QY7_WDT_PCLK;
+    s->wdt_enabled = true;
     /* Assumed asserted PowerMonitor input levels (STATUS0 bits 7 and 9). */
     s->status0_inputs = 0x0280;
     s->extint_model = true;
@@ -738,7 +751,14 @@ static void qy7_init(MachineState *machine)
     create_unimplemented_device("qy7.lbsc-window2", 0xff804100, 0xf00);
     create_unimplemented_device("qy7.gpio", 0xffc40000, 0x4000);
     create_unimplemented_device("qy7.cpg", 0xffc80000, 0x1000);
-    create_unimplemented_device("qy7.wdt", 0xffcc0000, 0x1000);
+    {
+        DeviceState *wdt = qdev_new("clarion-qy7-wdt");
+
+        qdev_prop_set_uint32(wdt, "pclk-hz", qmachine->wdt_pclk_hz);
+        qdev_prop_set_bit(wdt, "enabled", qmachine->wdt_enabled);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(wdt), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(wdt), 0, 0xffcc0000);
+    }
     {
         DeviceState *sdhi = qdev_new(TYPE_RENESAS_SDHI);
         DriveInfo *di = drive_get(IF_SD, 0, 0);
@@ -833,6 +853,17 @@ static void qy7_machine_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_uint8_ptr(
         oc, "dipsw", offsetof(QY7MachineState, dipsw),
         OBJ_PROP_FLAG_READWRITE);
+    object_class_property_add_uint32_ptr(
+        oc, "wdt-pclk", offsetof(QY7MachineState, wdt_pclk_hz),
+        OBJ_PROP_FLAG_READWRITE);
+    object_class_property_set_description(oc, "wdt-pclk",
+        "Provisional WDT Pck in Hz (default 24000000, using documented "
+        "24 MHz EXTAL as a proxy; QY7 WDT Pck is not measured)");
+    object_class_property_add_bool_ptr(
+        oc, "wdt", offsetof(QY7MachineState, wdt_enabled),
+        OBJ_PROP_FLAG_READWRITE);
+    object_class_property_set_description(oc, "wdt",
+        "Enable QY7 WDT counting (default on; off freezes the WDT timer)");
     object_class_property_add_uint16_ptr(
         oc, "status0-inputs", offsetof(QY7MachineState, status0_inputs),
         OBJ_PROP_FLAG_READWRITE);
