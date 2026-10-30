@@ -258,6 +258,22 @@ static void sh7785_class_init(ObjectClass *oc, const void *data)
     scc->cvr = 0x71440211;
 }
 
+/*
+ * Renesas SH77722 (SH-NaviJ2), part R8A77722DA01BGV: IC101 on the Clarion
+ * QY-7201N-A CPU board schematic. PVR/PRR were read from real QY7201NE
+ * hardware. CVR and the instance features are still copied from SH7785 and
+ * have not been verified on hardware.
+ */
+static void sh77722_class_init(ObjectClass *oc, const void *data)
+{
+    (void)data;
+    SuperHCPUClass *scc = SUPERH_CPU_CLASS(oc);
+
+    scc->pvr = 0x10300800;
+    scc->prr = 0x00001f00;
+    scc->cvr = 0x71440211;
+}
+
 static void superh_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
@@ -372,6 +388,8 @@ static const TypeInfo superh_cpu_type_infos[] = {
     DEFINE_SUPERH_CPU_TYPE(TYPE_SH7751R_CPU, sh7751r_class_init,
                            sh7751r_cpu_initfn),
     DEFINE_SUPERH_CPU_TYPE(TYPE_SH7785_CPU, sh7785_class_init,
+                           sh7785_cpu_initfn),
+    DEFINE_SUPERH_CPU_TYPE(TYPE_SH77722_CPU, sh77722_class_init,
                            sh7785_cpu_initfn),
 
 };

@@ -584,7 +584,7 @@ static void qy7_init(MachineState *machine)
     }
 
     if (!cpu) {
-        error_report("Unable to create SH7785 CPU");
+        error_report("Unable to create SH77722 CPU");
         exit(1);
     }
     if (qmachine->dipsw > 7) {
@@ -819,9 +819,9 @@ static void qy7_init(MachineState *machine)
 
 static void qy7_machine_init(MachineClass *mc)
 {
-    mc->desc = "Clarion QY7 (SH7785)";
+    mc->desc = "Clarion QY7 (Renesas SH77722 SH-NaviJ2)";
     mc->init = qy7_init;
-    mc->default_cpu_type = TYPE_SH7785_CPU;
+    mc->default_cpu_type = TYPE_SH77722_CPU;
     mc->ignore_memory_transaction_failures = true;
 }
 
